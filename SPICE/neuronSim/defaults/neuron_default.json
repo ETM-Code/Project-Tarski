@@ -1,0 +1,37 @@
+{
+  "name": "demo_neuron",
+  "supplies": {
+    "vdd": 5.0,
+    "vref": 2.5,
+    "opa604_vpos": 12.0,
+    "opa604_vneg": -12.0
+  },
+  "membrane": {
+    "C_mem_F": 3.3e-08,
+    "R_leak_ohm": 330000.0
+  },
+  "threshold": {
+    "over_vref_V": 0.8,
+    "hysteresis_V": 0.05
+  },
+  "reset": {
+    "enable": true,
+    "series_R_ohm": 200.0,
+    "mux_Ron_ohm": 10.0,
+    "mux_Roff_ohm": 1000000000.0,
+    "mux_Coff_F": 7e-12,
+    "switch_Vt": 2.5,
+    "switch_Vh": 0.1
+  },
+  "comparator": {
+    "offset_V": 0.003,
+    "prop_delay_s": 5e-08,
+    "vlow_V": 0.0,
+    "vhigh_V": 5.0,
+    "gain_fast": 2000.0
+  },
+  "simulation": {
+    "tstop_s": 0.05,
+    "tstep_s": 1e-06
+  }
+}

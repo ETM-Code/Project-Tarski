@@ -1,0 +1,47 @@
+{
+  "title": "lif_demo_network",
+  "neuron_json": "defaults/neuron_default.json",
+  "synapses": [
+    {
+      "name": "syn1",
+      "type": "excitatory",
+      "weight_ohm": 10000,
+      "spikes": [
+        {
+          "t_ms": 5.0,
+          "width_ms": 1.0,
+          "amp_V": 1.2
+        }
+      ]
+    },
+    {
+      "name": "syn2",
+      "type": "excitatory",
+      "weight_ohm": 20000,
+      "spikes": [
+        {
+          "t_ms": 10.0,
+          "width_ms": 1.0,
+          "amp_V": 1.2
+        },
+        {
+          "t_ms": 12.0,
+          "width_ms": 1.0,
+          "amp_V": 1.2
+        }
+      ]
+    },
+    {
+      "name": "syn3",
+      "type": "excitatory",
+      "weight_ohm": 50000,
+      "spikes": [
+        {
+          "t_ms": 20.0,
+          "width_ms": 2.0,
+          "amp_V": 1.2
+        }
+      ]
+    }
+  ]
+}

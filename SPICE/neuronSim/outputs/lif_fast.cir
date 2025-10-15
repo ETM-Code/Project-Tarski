@@ -66,7 +66,7 @@ D_syn3 n_syn3_r mem D_SCHOTTKY
 .control
   set filetype=ascii
   tran 1e-06 0.05
-  wrdata /Users/eoghancollins/Tarskii/SPICE/alt/outputs/lif_fast.csv time v(vref) v(mem) v(comp) v(n_syn1) v(n_syn2) v(n_syn3)
+  wrdata /Users/eoghancollins/Tarskii/SPICE/neuronSim/outputs/lif_fast.csv time v(vref) v(mem) v(comp) v(n_syn1) v(n_syn2) v(n_syn3)
   quit
 .endc
 

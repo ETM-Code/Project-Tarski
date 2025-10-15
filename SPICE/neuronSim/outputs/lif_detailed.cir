@@ -1,0 +1,78 @@
+* lif_demo_network [DETAILED]
+
+VDD vdd 0 5.0
+VREF vref 0 2.5
+VOPP vpos 0 12.0
+VOPN vneg 0 -12.0
+* ---------- demo_neuron FAST neuron subcircuit ----------
+.subckt demo_neuron_fast mem vref vdd comp_out
+Cmem mem vref 3.3e-08
+Rleak mem vref 330000.0
+.param VTH0=0.8
+.param HYST=0.05
+.param VLO=0.0 VHI=5.0
+* Threshold node includes hysteresis based on comparator output level
+Bvth vth 0 V = V(vref) + VTH0 + HYST*((V(comp_out)-(VLO+VHI)/2)/(VHI-VLO))
+* Smooth comparator (tanh) to aid convergence
+Bcomp comp_raw 0 V = VLO + (VHI-VLO)*0.5*(1+tanh(2000.0*(V(mem)-V(vth))))
+Rcout comp_raw comp_out 1k
+Ccout comp_out 0 1n
+* Reset path: mem -> series R -> ideal switch -> vref
+Rreset mem reset_node 200.0
+Sreset reset_node vref comp_out 0 SWRESET
+.model SWRESET SW(Ron=0.1 Roff=1e12 Vt=2.5 Vh=0.1)
+.ends
+
+* ---------- demo_neuron DETAILED neuron subcircuit ----------
+.subckt demo_neuron_detailed mem vref vdd comp_out vpos vneg
+* OPA604-like buffer for Vref (unity gain follower)
+Ebuf vref_buf 0 vref 0 1e5
+Rbuf vref_buf vref 1k
+Cbuf vref 0 80p
+* Tie the external vref node to the buffered node
+Rvr vref vref_buf 1m
+Cmem mem vref 3.3e-08
+Rleak mem vref 330000.0
+.param VTH0=0.8
+.param HYST=0.05
+.param VLO=0.0 VHI=5.0
+* Dynamic threshold w/ hysteresis
+Bvth vth 0 V = V(vref) + VTH0 + HYST*((V(comp_out)-(VLO+VHI)/2)/(VHI-VLO))
+* Comparator with offset and RC delay
+Bcomp comp_raw 0 V = VLO + (VHI-VLO)*0.5*(1+tanh(2000*(V(mem)-V(vth)-0.003)))
+Rcout comp_raw comp_out 10.0
+Ccout comp_out 0 5e-09
+* Reset path through MAX4617-like switch in series with a limiting resistor
+Rreset mem reset_node 200.0
+Coff_reset reset_node vref 7e-12
+Sreset reset_node vref comp_out 0 SWMUX
+.model SWMUX SW(Ron=10.0 Roff=1000000000.0 Vt=2.5 Vh=0.1)
+.ends
+
+
+XNEU mem vref vdd comp vpos vneg demo_neuron_detailed
+.model D_SCHOTTKY D(Is=1e-6 N=1.05 Rs=2 Cjo=2p Vj=0.3 M=0.3 Eg=0.69)
+Vsrc_syn1 n_syn1 vref PWL(0.0 0.0 0.005 0.0 0.005001 1.2 0.005999 1.2 0.006 0.0)
+
+R_syn1_A n_syn1 n_syn1_w 75
+R_syn1_W n_syn1_w n_syn1_r 10000.0
+D_syn1 n_syn1_r mem D_SCHOTTKY
+Vsrc_syn2 n_syn2 vref PWL(0.0 0.0 0.01 0.0 0.010001 1.2 0.010999 1.2 0.011 0.0 0.012 0.0 0.012001 1.2 0.012999 1.2 0.013 0.0)
+
+R_syn2_A n_syn2 n_syn2_w 75
+R_syn2_W n_syn2_w n_syn2_r 20000.0
+D_syn2 n_syn2_r mem D_SCHOTTKY
+Vsrc_syn3 n_syn3 vref PWL(0.0 0.0 0.02 0.0 0.020001 1.2 0.021999 1.2 0.022 0.0)
+
+R_syn3_A n_syn3 n_syn3_w 75
+R_syn3_W n_syn3_w n_syn3_r 50000.0
+D_syn3 n_syn3_r mem D_SCHOTTKY
+
+.control
+  set filetype=ascii
+  tran 1e-06 0.05
+  wrdata /Users/eoghancollins/Tarskii/SPICE/neuronSim/outputs/lif_detailed.csv time v(vref) v(mem) v(comp) v(n_syn1) v(n_syn2) v(n_syn3)
+  quit
+.endc
+
+.end

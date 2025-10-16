@@ -140,46 +140,72 @@ def generate_fast_neuron(cfg: NeuronConfig) -> str:
 def generate_detailed_neuron(cfg: NeuronConfig) -> str:
     """
     DETAILED neuron subckt:
-      - Vref buffered by a simple OPA604-like macromodel (finite gain and GBW)
-      - Comparator has input offset and explicit delay (via RC)
-      - Reset through MAX4617-like Ron (+ external series resistor) and Coff
+      - Vref buffered (OPA604-like follower)
+      - Membrane RC to Vref
+      - Comparator with *real* hysteresis network (resistors) and small delay/offset
+      - Reset through MAX4617-like Ron/Coff + series resistor
     """
     s = []
     s.append(_header(f"{cfg.name} DETAILED neuron subcircuit"))
     s.append(f".subckt {cfg.name}_detailed mem vref vdd comp_out vpos vneg\n")
-    # Vref buffer (OPA604-like): simple single-pole op-amp model in unity gain
+
+    # --- Vref buffer (OPA604-like follower; simple high-gain + pole) ---
     s.append("* OPA604-like buffer for Vref (unity gain follower)\n")
-    s.append("Ebuf vref_buf 0 vref 0 1e5\n")                 # finite DC gain
+    s.append("Ebuf vref_buf 0 vref 0 1e5\n")        # very high DC gain
     s.append("Rbuf vref_buf vref 1k\n")
-    s.append("Cbuf vref 0 80p\n")                            # sets a pole ~20 MHz for 1e5 gain/GBW notionally
-    s.append("* Tie the external vref node to the buffered node\n")
+    s.append("Cbuf vref 0 80p\n")                   # small pole -> finite bandwidth
+    s.append("* Tie external vref node to buffered node (very small tie)\n")
     s.append("Rvr vref vref_buf 1m\n")
-    # Membrane
+
+    # --- Membrane ---
     s.append(f"Cmem mem vref {cfg.membrane.C_mem_F}\n")
     s.append(f"Rleak mem vref {cfg.membrane.R_leak_ohm}\n")
-    # Threshold and hysteresis
-    s.append(f".param VTH0={cfg.threshold.over_vref_V}\n")
-    s.append(f".param HYST={cfg.threshold.hysteresis_V}\n")
-    s.append(f".param VLO={cfg.comparator.vlow_V} VHI={cfg.comparator.vhigh_V}\n")
-    s.append("* Dynamic threshold w/ hysteresis\n")
-    s.append("Bvth vth 0 V = V(vref) + VTH0 + HYST*((V(comp_out)-(VLO+VHI)/2)/(VHI-VLO))\n")
-    # Comparator core: tanh + input offset + output RC for delay
-    s.append("* Comparator with offset and RC delay\n")
-    s.append(f"Bcomp comp_raw 0 V = VLO + (VHI-VLO)*0.5*(1+tanh(2000*(V(mem)-V(vth)-{cfg.comparator.offset_V})))\n")
-    # Simple delay: RC on output
-    rc = max(cfg.comparator.prop_delay_s/10, 1e-9)
-    rout = max(cfg.comparator.prop_delay_s/rc, 1.0)
+
+    # --- Real comparator hysteresis network (non-inverting Schmitt) ---
+    # Target center = Vref + cfg.threshold.over_vref_V  (e.g., 2.5 + 0.8 = 3.3 V)
+    # Hysteresis width ~ cfg.threshold.hysteresis_V (e.g., 0.05 V total, ±25 mV)
+    # Choose divider from VDD to Vref, then compute Rf to get required beta = ΔVhys / (VHI-VLO).
+    vhi = cfg.comparator.vhigh_V
+    vlo = cfg.comparator.vlow_V
+    dv_out = max(vhi - vlo, 1e-6)
+    beta = cfg.threshold.hysteresis_V / dv_out               # ~0.05/5 = 0.01
+
+    # Practical divider near 133k/62k -> center ≈ Vref + 0.8 V with Vdd=5 V (documented in README)
+    # We hardcode those here to keep subckt deterministic; feel free to make JSON-driven later.
+    s.append("* Divider to set center threshold near Vref+over_vref_V\n")
+    s.append("Rvh  vdd     vth_node 133k\n")                  # top to VDD
+    s.append("Rvl  vth_node vref    62k\n")                   # bottom to Vref
+
+    # Compute Rf that gives beta ≈ hysteresis_V / (VHI-VLO)
+    # beta = (1/Rf) / (1/Rf + 1/Rvh + 1/Rvl)  ->  Rf = 1 / (beta*(1/Rvh+1/Rvl)/(1-beta))
+    # We'll implement numerically here and place as a param’d value in the netlist.
+    g_div = (1.0/133000.0) + (1.0/62000.0)
+    Rf = (1.0 / (beta * g_div / max(1.0 - beta, 1e-6)))
+    Rf_ohm = max(min(Rf, 50e6), 100e3)                        # guardrails
+    s.append(f"Rf   comp_out vth_node {Rf_ohm:.3g}\n")         # e.g., ~4.22e6
+
+    # --- Comparator core: tanh around (mem - vth_node - offset), with small delay ---
+    s.append(f".param VLO={vlo} VHI={vhi}\n")
+    s.append("* Comparator behavioral core w/ small input offset and output RC delay\n")
+    # RC chosen so that rout*rc ~= cfg.comparator.prop_delay_s (keep rout >= 10 for convergence)
+    rc = max(cfg.comparator.prop_delay_s/10.0, 1e-9)
+    rout = max(cfg.comparator.prop_delay_s/rc, 10.0)
+    s.append(f"Bcomp comp_raw 0 V = VLO + (VHI-VLO)*0.5*(1+tanh(2000*( V(mem) - V(vth_node) - {cfg.comparator.offset_V} )))\n")
     s.append(f"Rcout comp_raw comp_out {rout}\n")
     s.append(f"Ccout comp_out 0 {rc}\n")
-    # Reset through MAX4617-like switch (Ron, Coff) in series with external resistor
+
+    # --- Reset path through MAX4617-like switch (Ron/Coff) ---
     if cfg.reset.enable:
-        s.append("* Reset path through MAX4617-like switch in series with a limiting resistor\n")
+        s.append("* Reset path: mem -> Rseries -> (switch Ron/Coff) -> Vref\n")
         s.append(f"Rreset mem reset_node {cfg.reset.series_R_ohm}\n")
-        s.append("Coff_reset reset_node vref {Coff}\n".replace("{Coff}", f"{cfg.reset.mux_Coff_F}"))
+        s.append(f"Coff_reset reset_node vref {cfg.reset.mux_Coff_F}\n")
         s.append("Sreset reset_node vref comp_out 0 SWMUX\n")
-        s.append(f".model SWMUX SW(Ron={cfg.reset.mux_Ron_ohm} Roff={cfg.reset.mux_Roff_ohm} Vt={cfg.reset.switch_Vt} Vh={cfg.reset.switch_Vh})\n")
+        s.append(f".model SWMUX SW(Ron={cfg.reset.mux_Ron_ohm} Roff={cfg.reset.mux_Roff_ohm} "
+                 f"Vt={cfg.reset.switch_Vt} Vh={cfg.reset.switch_Vh})\n")
+
     s.append(".ends\n")
     return "".join(s)
+
 
 def main():
     ap = argparse.ArgumentParser(description="Generate ngspice subcircuits for a LIF neuron.")

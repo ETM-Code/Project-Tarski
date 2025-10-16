@@ -29,20 +29,20 @@ Sreset reset_node vref comp_out 0 SWRESET
 Ebuf vref_buf 0 vref 0 1e5
 Rbuf vref_buf vref 1k
 Cbuf vref 0 80p
-* Tie the external vref node to the buffered node
+* Tie external vref node to buffered node (very small tie)
 Rvr vref vref_buf 1m
 Cmem mem vref 3.3e-08
 Rleak mem vref 330000.0
-.param VTH0=0.8
-.param HYST=0.05
+* Divider to set center threshold near Vref+over_vref_V
+Rvh  vdd     vth_node 133k
+Rvl  vth_node vref    62k
+Rf   comp_out vth_node 4.19e+06
 .param VLO=0.0 VHI=5.0
-* Dynamic threshold w/ hysteresis
-Bvth vth 0 V = V(vref) + VTH0 + HYST*((V(comp_out)-(VLO+VHI)/2)/(VHI-VLO))
-* Comparator with offset and RC delay
-Bcomp comp_raw 0 V = VLO + (VHI-VLO)*0.5*(1+tanh(2000*(V(mem)-V(vth)-0.003)))
+* Comparator behavioral core w/ small input offset and output RC delay
+Bcomp comp_raw 0 V = VLO + (VHI-VLO)*0.5*(1+tanh(2000*( V(mem) - V(vth_node) - 0.003 )))
 Rcout comp_raw comp_out 10.0
 Ccout comp_out 0 5e-09
-* Reset path through MAX4617-like switch in series with a limiting resistor
+* Reset path: mem -> Rseries -> (switch Ron/Coff) -> Vref
 Rreset mem reset_node 200.0
 Coff_reset reset_node vref 7e-12
 Sreset reset_node vref comp_out 0 SWMUX

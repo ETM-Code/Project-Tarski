@@ -17,23 +17,26 @@ vdd                                          5
 vref                                       2.5
 mem                                        2.5
 xneu.vth                                 3.275
-comp                                         0
+comp                                8.2311e-05
 xneu.comp_raw                                0
 xneu.reset_node                            2.5
+ana                               -2.15827e-12
+n_outmix                            0.00241527
 n_syn1                                     2.5
 n_syn1_r                                   2.5
 n_syn2                                     2.5
 n_syn2_r                                   2.5
 n_syn3                                     2.5
 n_syn3_r                                   2.5
-b.xneu.bcomp#branch                          0
+b.xneu.bcomp#branch                 8.2311e-08
 b.xneu.bvth#branch                           0
+e.xneu.eana#branch                 2.41527e-06
 vsrc_syn3#branch                  -6.94183e-17
 vsrc_syn2#branch                  -1.12396e-16
 vsrc_syn1#branch                  -3.35664e-17
-vref#branch                        -2.2192e-16
+vref#branch                       -2.49758e-06
 vdd#branch                                   0
 
 
-No. of Data Rows : 51354
+No. of Data Rows : 52619
 ngspice-44.2 done

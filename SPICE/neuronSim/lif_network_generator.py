@@ -21,70 +21,18 @@ except Exception as e:
     # Delay import errors until plotting stage
     np = pd = plt = None
 
-# Reuse config dataclasses from neuron generator (copy kept here to avoid import-time path issues)
-@dataclass
-class Supplies:
-    vdd: float
-    vref: float
-    opa604_vpos: float
-    opa604_vneg: float
-
-@dataclass
-class Membrane:
-    C_mem_F: float
-    R_leak_ohm: float
-
-@dataclass
-class Threshold:
-    over_vref_V: float
-    hysteresis_V: float
-
-@dataclass
-class ResetPath:
-    enable: bool
-    series_R_ohm: float
-    mux_Ron_ohm: float
-    mux_Roff_ohm: float
-    mux_Coff_F: float
-    switch_Vt: float
-    switch_Vh: float
-
-@dataclass
-class ComparatorCfg:
-    offset_V: float
-    prop_delay_s: float
-    vlow_V: float
-    vhigh_V: float
-    gain_fast: float
-
-@dataclass
-class SimCfg:
-    tstop_s: float
-    tstep_s: float
-
-@dataclass
-class NeuronConfig:
-    name: str
-    supplies: Supplies
-    membrane: Membrane
-    threshold: Threshold
-    reset: ResetPath
-    comparator: ComparatorCfg
-    simulation: SimCfg
-
-    @staticmethod
-    def load(json_path: str) -> "NeuronConfig":
-        with open(json_path, "r") as f:
-            d = json.load(f)
-        return NeuronConfig(
-            name=d.get("name","lif_neuron"),
-            supplies=Supplies(**d["supplies"]),
-            membrane=Membrane(**d["membrane"]),
-            threshold=Threshold(**d["threshold"]),
-            reset=ResetPath(**d["reset"]),
-            comparator=ComparatorCfg(**d["comparator"]),
-            simulation=SimCfg(**d["simulation"]),
-        )
+# Import neuron configuration classes from neuron generator
+from lif_neuron_generator import (
+    Supplies, 
+    Membrane, 
+    Threshold, 
+    ResetPath, 
+    ComparatorCfg, 
+    SimCfg, 
+    NeuronConfig,
+    generate_fast_neuron,
+    generate_detailed_neuron
+)
 
 @dataclass
 class Spike:
@@ -187,23 +135,31 @@ def build_netlist(cfgN: NetworkConfig, cfg: NeuronConfig, mode: str, out_csv: st
         lines.append(f"VOPN vneg 0 {cfg.supplies.opa604_vneg}")
 
     # Include subcircuits (regenerate on the fly)
-    from lif_neuron_generator import NeuronConfig as NC, generate_fast_neuron, generate_detailed_neuron
     neuron_fast = generate_fast_neuron(cfg)
     neuron_det  = generate_detailed_neuron(cfg)
     lines.append(neuron_subckt_includes(neuron_fast, neuron_det))
 
     # Neuron instance
     if mode == "fast":
-        lines.append(f"XNEU mem vref vdd comp {cfg.name}_fast")
+        lines.append(f"XNEU mem vref vdd comp ana {cfg.name}_fast")
     else:
-        lines.append(f"XNEU mem vref vdd comp vpos vneg {cfg.name}_detailed")
+        lines.append(f"XNEU mem vref vdd comp vpos vneg ana {cfg.name}_detailed")
+
+    # ---- Hybrid-output monitor: comp_out (through diode) + ana (through small R) -> n_outmix
+    # This does not alter your synapses. It only exposes what a shared hybrid line would look like.
+    # Digital path: one-way via Schottky to avoid back-drive into comparator
+    lines.append("Ra_out ana n_outmix 1k")
+    lines.append("Dout   comp n_outmix D_SCHOTTKY")
+    # Weak return so the node is numerically well-defined in SPICE even if both drivers are idle
+    lines.append("Rout_weak n_outmix vref 1Meg")
 
     # One Schottky diode model (tuned to be gentle; tweak as needed)
     # ~0.25 V at ~0.1 mA, small Rs and Cjo to help convergence
     lines.append(".model D_SCHOTTKY D(Is=1e-6 N=1.05 Rs=2 Cjo=2p Vj=0.3 M=0.3 Eg=0.69)")
 
     # Synapses
-    signals = ["v(vref)", "v(mem)", "v(comp)"]
+    signals = ["v(vref)", "v(mem)", "v(comp)", "v(ana)", "v(n_outmix)"]
+
     for syn in cfgN.synapses:
         sign = +1.0 if syn.type.lower().startswith("excit") else -1.0
 
@@ -318,82 +274,80 @@ def plot_results(csv_path: str, png_prefix: str):
         print(f"CSV parse error: got shape {arr.shape}")
         return
 
-    # Detect wrdata layout:
-    # If wrdata wrote time+value per vector, col count is even and
-    # the 'time' columns (0,2,4,...) are nearly identical.
     ncols = arr.shape[1]
-    if ncols % 2 == 0:
-        # Check if the first two time-columns are (nearly) equal
-        t0 = arr[:, 0]
-        t1 = arr[:, 2] if ncols >= 4 else arr[:, 0]
-        paired_format = np.allclose(t0, t1, rtol=0, atol=1e-12)
-    else:
-        paired_format = False
+    paired_format = (ncols % 2 == 0) and np.allclose(arr[:,0], arr[:,2], atol=1e-14)
 
+    # We always write base signals in this order from wrdata:
+    # time, vref, vmem, vcomp, vana, v(n_outmix), synapses...
     if paired_format:
-        # Value columns are the odd indices: 1,3,5,...,(2*M-1)
-        M = ncols // 2
-        val_cols = [2*k + 1 for k in range(M)]
-        # Map vectors in the order we asked wrdata:
-        # time, vref, vmem, vcomp, v(n_syn1), v(n_syn2), v(n_syn3)
-        time = arr[:, val_cols[0]]
-        vref = arr[:, val_cols[1]]
-        vmem = arr[:, val_cols[2]]
+        val_cols = [2*i+1 for i in range(ncols//2)]
+        time  = arr[:, val_cols[0]]
+        vref  = arr[:, val_cols[1]]
+        vmem  = arr[:, val_cols[2]]
         vcomp = arr[:, val_cols[3]]
-        syn_cols = val_cols[4:]
+        vana  = arr[:, val_cols[4]]
+        vcomb = arr[:, val_cols[5]] if len(val_cols) > 5 else None
+        syn   = arr[:, val_cols[6:]] if len(val_cols) > 6 else None
     else:
-        # Fallback: assume one column per vector (rare with wrdata)
-        time = arr[:, 0]
-        vref = arr[:, 1]
-        vmem = arr[:, 2]
+        time  = arr[:, 0]
+        vref  = arr[:, 1]
+        vmem  = arr[:, 2]
         vcomp = arr[:, 3]
-        syn_cols = list(range(4, ncols))
-
-    # Build syn matrix if any
-    syn = arr[:, syn_cols] if len(syn_cols) else None
+        vana  = arr[:, 4]
+        vcomb = arr[:, 5] if ncols > 5 else None
+        syn   = arr[:, 6:] if ncols > 6 else None
 
     # Derived signals
-    C = 33e-9  # keep this in sync with your JSON
     dv = vmem - vref
+    C  = 33e-9
     Q  = C * dv
 
-    # 1) Spikes (absolute node voltages vs ground)
+    # ---- Synaptic spikes ----
     if syn is not None and syn.shape[1] > 0:
         plt.figure()
         for k in range(syn.shape[1]):
             plt.plot(time*1e3, syn[:, k], label=f"syn{k+1}")
-        plt.xlabel("Time (ms)"); plt.ylabel("Node volts (V)")
-        plt.title("Synaptic spikes (absolute)"); plt.grid(True); plt.legend()
+        plt.title("Synaptic spikes (absolute)")
+        plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)"); plt.grid(True); plt.legend()
         plt.savefig(f"{png_prefix}_spikes.png", dpi=160); plt.close()
 
-    # 2) Membrane absolute
+    # ---- Membrane ----
     plt.figure()
     plt.plot(time*1e3, vmem, label="Vmem")
-    plt.plot(time*1e3, vref, "--", label="Vref")
-    plt.xlabel("Time (ms)"); plt.ylabel("Volts (V)")
-    plt.title("Membrane voltage"); plt.grid(True); plt.legend()
-    plt.savefig(f"{png_prefix}_vmem.png", dpi=160); plt.close()
+    plt.plot(time*1e3, vref, '--', label="Vref")
+    plt.title("Membrane voltage"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
+    plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_vmem.png", dpi=160); plt.close()
 
-    # 3) Membrane delta & charge
+    # ---- Comparator (digital) output ----
     plt.figure()
-    plt.plot(time*1e3, dv, label="Vmem - Vref")
-    plt.axhline(0.8, linestyle="--", label="Thresh +0.8 V")
-    plt.xlabel("Time (ms)"); plt.ylabel("Volts (V)")
-    plt.title("Membrane delta (over Vref)"); plt.grid(True); plt.legend()
-    plt.savefig(f"{png_prefix}_dv.png", dpi=160); plt.close()
-
-    plt.figure()
-    plt.plot(time*1e3, Q, label="Q = C*(Vmem - Vref)")
-    plt.xlabel("Time (ms)"); plt.ylabel("Charge (C)")
-    plt.title("Membrane charge"); plt.grid(True); plt.legend()
-    plt.savefig(f"{png_prefix}_charge.png", dpi=160); plt.close()
-
-    # 4) Comparator output
-    plt.figure()
-    plt.plot(time*1e3, vcomp, label="Comparator out")
-    plt.xlabel("Time (ms)"); plt.ylabel("Volts (V)")
-    plt.title("Comparator output (spike)"); plt.grid(True); plt.legend()
+    plt.plot(time*1e3, vcomp, label="Vcomp (digital output)")
+    plt.title("Digital output (from comparator)")
+    plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)"); plt.grid(True); plt.legend()
     plt.savefig(f"{png_prefix}_comp.png", dpi=160); plt.close()
+
+    # ---- Analog output ----
+    plt.figure()
+    plt.plot(time*1e3, vana, color="orange", label="Analog output (Vmem - Vref)")
+    plt.title("Analog output"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
+    plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_analog.png", dpi=160); plt.close()
+
+    # ---- Combined output after diode mixing ----
+    if vcomb is not None:
+        plt.figure()
+        plt.plot(time*1e3, vana, label="Analog out (pre-mix)")
+        plt.plot(time*1e3, vcomp, label="Comparator out (pre-mix)")
+        plt.plot(time*1e3, vcomb, '--', linewidth=2, label="Combined output (post diode mix)")
+        plt.title("Hybrid output (analog + digital)")
+        plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
+        plt.grid(True); plt.legend()
+        plt.savefig(f"{png_prefix}_hybrid.png", dpi=160); plt.close()
+
+    # ---- Membrane charge ----
+    plt.figure()
+    plt.plot(time*1e3, Q, label="Charge Q = C·ΔV")
+    plt.title("Membrane charge accumulation")
+    plt.xlabel("Time (ms)"); plt.ylabel("Coulombs")
+    plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_charge.png", dpi=160); plt.close()
 
 
 def main():

@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 Build the full LIF circuit (neuron + synapses + spikes) and optionally run ngspice.
@@ -17,22 +16,24 @@ try:
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
-except Exception as e:
+except Exception:
     # Delay import errors until plotting stage
     np = pd = plt = None
 
 # Import neuron configuration classes from neuron generator
 from lif_neuron_generator import (
-    Supplies, 
-    Membrane, 
-    Threshold, 
-    ResetPath, 
-    ComparatorCfg, 
-    SimCfg, 
+    Supplies,
+    Membrane,
+    Threshold,
+    ResetPath,
+    ComparatorCfg,
+    SimCfg,
     NeuronConfig,
     generate_fast_neuron,
     generate_detailed_neuron
 )
+
+# ------------------ Data classes ------------------
 
 @dataclass
 class Spike:
@@ -65,7 +66,8 @@ class NetworkConfig:
         ) for s in d.get("synapses",[])]
         return NetworkConfig(title=d.get("title","lif_network"), neuron_json=d["neuron_json"], synapses=synapses)
 
-# -------- Utility --------
+# ------------------ Utilities ------------------
+
 def ensure_outputs_dir():
     outdir = "outputs"
     os.makedirs(outdir, exist_ok=True)
@@ -85,10 +87,16 @@ def estimate_membrane_step(cfg: NeuronConfig, Rw: float, A: float, width_s: floa
     return Vinf * alpha
 
 def head_controls_csv(filename_csv: str, tstep: float, tstop: float, signals: List[str]) -> str:
+    """
+    Emit the ngspice control block. We force a single time scale and ask for
+    vector names in the file header so the parser can map columns by name.
+    """
     sigs = " ".join(signals)
     return textwrap.dedent(f"""
     .control
       set filetype=ascii
+      set wr_singlescale
+      set wr_vecnames
       tran {tstep} {tstop}
       wrdata {filename_csv} time {sigs}
       quit
@@ -105,92 +113,62 @@ def gen_spike_source(name: str, spikes: List[Spike], sign: float) -> str:
         t0 = sp.t_ms/1000.0
         t1 = t0 + sp.width_ms/1000.0
         A  = sign * sp.amp_V
-        # Piecewise: (t0,0) -> (t0+1us, A) -> (t1-1us, A) -> (t1,0) for clean edges
         eps = 1e-6
         points += [(t0, 0.0), (t0+eps, A), (max(t0+eps, t1-eps), A), (t1, 0.0)]
-    # Deduplicate/monotonic
     points = sorted({(round(t,12), round(v,9)) for (t,v) in points})
-    # Build PWL string
     flat = " ".join(f"{t} {v}" for t,v in points)
     return f"Vsrc_{name} n_{name} vref PWL({flat})\n"
 
 def neuron_subckt_includes(neuron_subckt_fast: str, neuron_subckt_detailed: str) -> str:
     return neuron_subckt_fast + "\n" + neuron_subckt_detailed + "\n"
 
+# ------------------ Netlist builder ------------------
+
 def build_netlist(cfgN: NetworkConfig, cfg: NeuronConfig, mode: str, out_csv: str) -> str:
-    """
-    mode: 'fast' or 'detailed'
-    Synapses use series diode to block idle leak:
-      excitatory:  Vsrc → Rweight → D(anode→cathode) → mem
-      inhibitory:  Vsrc → Rweight → D(cathode→anode) → mem
-    """
     title = f"* {cfgN.title} [{mode.upper()}]"
     lines = [title, ""]
 
     # Supplies
     lines.append(f"VDD vdd 0 {cfg.supplies.vdd}")
     lines.append(f"VREF vref 0 {cfg.supplies.vref}")
-    if mode == "detailed":
-        lines.append(f"VOPP vpos 0 {cfg.supplies.opa604_vpos}")
-        lines.append(f"VOPN vneg 0 {cfg.supplies.opa604_vneg}")
 
-    # Include subcircuits (regenerate on the fly)
-    neuron_fast = generate_fast_neuron(cfg)
-    neuron_det  = generate_detailed_neuron(cfg)
-    lines.append(neuron_subckt_includes(neuron_fast, neuron_det))
+    # Include subcircuits (regen on the fly)
+    lines.append(generate_fast_neuron(cfg))
+    lines.append(generate_detailed_neuron(cfg))
 
     # Neuron instance
     if mode == "fast":
-        lines.append(f"XNEU mem vref vdd comp ana {cfg.name}_fast")
+        lines.append(f"XNEU mem vref vdd comp ana sum {cfg.name}_fast")
     else:
-        lines.append(f"XNEU mem vref vdd comp vpos vneg ana {cfg.name}_detailed")
+        lines.append(f"XNEU mem vref vdd comp vpos vneg ana sum {cfg.name}_detailed")
 
-    # ---- Hybrid-output monitor: comp_out (through diode) + ana (through small R) -> n_outmix
-    # This does not alter your synapses. It only exposes what a shared hybrid line would look like.
-    # Digital path: one-way via Schottky to avoid back-drive into comparator
-    lines.append("Ra_out ana n_outmix 1k")
-    lines.append("Dout   comp n_outmix D_SCHOTTKY")
-    # Weak return so the node is numerically well-defined in SPICE even if both drivers are idle
-    lines.append("Rout_weak n_outmix vref 1Meg")
+    # --- Hybrid combiner: match PCB ---
+    # Analog path: 100 Ω from analog op-amp to the output node
+    # Digital path: Schottky from comparator to the same node (diode-OR)
+    # Light load to ground so the node is defined when nobody drives it
+    lines += [
+        "Ra_out   ana n_outmix 100",
+        "Diso     comp n_outmix D_SCHOTTKY",
+        "Rload    n_outmix 0 10k",
+        ".model   D_SCHOTTKY D(Is=1e-6 N=1.05 Rs=2 Cjo=2p Vj=0.3 M=0.3 Eg=0.69)"
+    ]
 
-    # One Schottky diode model (tuned to be gentle; tweak as needed)
-    # ~0.25 V at ~0.1 mA, small Rs and Cjo to help convergence
-    lines.append(".model D_SCHOTTKY D(Is=1e-6 N=1.05 Rs=2 Cjo=2p Vj=0.3 M=0.3 Eg=0.69)")
+    # Signals to write (order matters for the plotter)
+    signals = ["v(vref)", "v(mem)", "v(comp)", "v(ana)", "v(n_outmix)", "v(sum)"]
 
     # Synapses
-    signals = ["v(vref)", "v(mem)", "v(comp)", "v(ana)", "v(n_outmix)"]
-
     for syn in cfgN.synapses:
         sign = +1.0 if syn.type.lower().startswith("excit") else -1.0
-
-        # 1) Spike source relative to Vref (node that also serves as diode control)
         lines.append(gen_spike_source(syn.name, syn.spikes, sign))
-        signals.append(f"v(n_{syn.name})")  # plot the absolute spike node
+        signals.append(f"v(n_{syn.name})")
+        lines.append(f"R_{syn.name} n_{syn.name} sum {syn.weight_ohm}")
 
-        # 2) Series weight + diode
-        if mode == "fast":
-            # Vsrc -> R -> (node) -> D -> mem
-            lines.append(f"R_{syn.name} n_{syn.name} n_{syn.name}_r {syn.weight_ohm}")
-            if sign > 0:
-                # excitatory: anode at resistor side, cathode at mem
-                lines.append(f"D_{syn.name} n_{syn.name}_r mem D_SCHOTTKY")
-            else:
-                # inhibitory: reverse orientation (current mem<-res when pulse is negative)
-                lines.append(f"D_{syn.name} mem n_{syn.name}_r D_SCHOTTKY")
-        else:
-            # Include digipot parasitics in series before diode
-            # Vsrc -> Rend(75) -> Rwiper(weight) -> node_r -> D -> mem
-            lines.append(f"R_{syn.name}_A n_{syn.name} n_{syn.name}_w 75")
-            lines.append(f"R_{syn.name}_W n_{syn.name}_w n_{syn.name}_r {syn.weight_ohm}")
-            if sign > 0:
-                lines.append(f"D_{syn.name} n_{syn.name}_r mem D_SCHOTTKY")
-            else:
-                lines.append(f"D_{syn.name} mem n_{syn.name}_r D_SCHOTTKY")
-
-    # CSV write + transient control
+    # Control block (single time column)
     lines.append(head_controls_csv(out_csv, cfg.simulation.tstep_s, cfg.simulation.tstop_s, signals))
     lines.append(".end\n")
     return "\n".join(lines)
+
+# ------------------ Runner ------------------
 
 def run_ngspice(netlist_path: str, log_path: str) -> int:
     exe = shutil.which("ngspice")
@@ -204,15 +182,15 @@ def run_ngspice(netlist_path: str, log_path: str) -> int:
 def parse_args():
     ap = argparse.ArgumentParser()
     ap.add_argument("--network", default="defaults/network_default.json", help="Network JSON (synapses/spikes).")
-    ap.add_argument("--neuron", default="defaults/neuron_default.json", help="Neuron JSON (R, C, thresholds, supplies).")
+    ap.add_argument("--neuron",  default="defaults/neuron_default.json",   help="Neuron JSON (R, C, thresholds, supplies).")
     ap.add_argument("--mode", choices=["fast","detailed","both"], default="both", help="Which model to run.")
     ap.add_argument("--yes", action="store_true", help="If set and mode=both, skip the prompt and run detailed after fast.")
     ap.add_argument("--norun", action="store_true", help="Generate netlists only; do not run ngspice.")
-    args = ap.parse_args()
-    return args
+    return ap.parse_args()
+
+# ------------------ Validation ------------------
 
 def safety_and_math_validation(cfgN: NetworkConfig, cfg: NeuronConfig) -> Dict[str,str]:
-    """Compute key checks & predictions (text report) for series-diode synapses."""
     lines = []
     lines.append("== Sanity & math checks ==")
     if not (1.8 <= cfg.supplies.vdd <= 5.5):
@@ -222,20 +200,16 @@ def safety_and_math_validation(cfgN: NetworkConfig, cfg: NeuronConfig) -> Dict[s
     vth = cfg.supplies.vref + cfg.threshold.over_vref_V
     lines.append(f"Comparator nominal Vth: {vth:.3f} V (hyst ±{cfg.threshold.hysteresis_V/2:.3f} V)")
 
-    # Conservative Schottky drop assumption
-    VF = 0.25  # V, typical small-signal drop for our D_SCHOTTKY
-
+    VF = 0.25
     imax_cont = 6.5e-3
     for syn in cfgN.synapses:
         Amax = max((sp.amp_V for sp in syn.spikes), default=0.0)
         Aeff = max(Amax - VF, 0.0)
         Ipk = Aeff / max(syn.weight_ohm, 1e-12)
         if Ipk > 0.8*imax_cont:
-            lines.append(f"WARNING: {syn.name} Ipk={Ipk*1e3:.2f} mA exceeds 80% of MCP41HV51(50k) continuous limit ({imax_cont*1e3:.1f} mA).")
+            lines.append(f"WARNING: {syn.name} Ipk={Ipk*1e3:.2f} mA exceeds 80% of MCP41HV51(50k) continuous ({imax_cont*1e3:.1f} mA).")
 
         width_s = max((sp.width_ms for sp in syn.spikes), default=0)/1000.0
-
-        # With diode isolation, inactive synapses do not shunt. Use Rw || Rleak only.
         Rw = syn.weight_ohm
         Rpar = 1.0 / (1.0/Rw + 1.0/cfg.membrane.R_leak_ohm)
         tau = Rpar * cfg.membrane.C_mem_F
@@ -250,105 +224,189 @@ def safety_and_math_validation(cfgN: NetworkConfig, cfg: NeuronConfig) -> Dict[s
     if cfg.reset.enable:
         ron = cfg.reset.mux_Ron_ohm
         rser = cfg.reset.series_R_ohm
-        ireset = 1.0/(ron+rser)  # A per volt
+        ireset = 1.0/(ron+rser)
         lines.append(f"Reset path: I≈{ireset*1e3:.2f} mA/V. With 1 V delta, {ireset*1e3:.2f} mA flows.")
     return {"text":"\n".join(lines)}
 
+# ------------------ Plotter ------------------
 
 def plot_results(csv_path: str, png_prefix: str):
     import numpy as np, matplotlib.pyplot as plt
 
-    # Load numeric rows only (ignore comments/headers)
+    # -------- Load file, grab vector names if present, collect numeric rows --------
+    names = None
     rows = []
     with open(csv_path, "r") as f:
         for line in f:
             s = line.strip()
-            if not s or s.startswith("*") or s[0].isalpha():
+            if not s:
                 continue
+            # Header with vector names (enabled by set wr_vecnames)
+            if s.lower().startswith("index "):          # e.g., "Index   time   v(vref)  ..."
+                parts = s.split()
+                # Some ngspice builds write "Index" then vector names; first is "Index", second "time"
+                names = [p for p in parts[1:]]          # drop "Index"
+                continue
+            # Skip comments
+            if s.startswith("*"):
+                continue
+            # Data row
             try:
                 rows.append([float(x) for x in s.split()])
             except ValueError:
-                continue
+                pass
+
     arr = np.array(rows, dtype=float)
     if arr.ndim != 2 or arr.size == 0:
         print(f"CSV parse error: got shape {arr.shape}")
         return
 
-    ncols = arr.shape[1]
-    paired_format = (ncols % 2 == 0) and np.allclose(arr[:,0], arr[:,2], atol=1e-14)
+    # -------- Recover columns by name (preferred) or by layout fallback --------
+    def build_by_name():
+        # With wr_vecnames and wr_singlescale, names should look like:
+        # ["time", "v(vref)", "v(mem)", "v(comp)", "v(ana)", "v(n_outmix)", "v(sum)", "v(xneu.vdef)", ...]
+        if names is None:
+            return None
+        # Some ngspice prints duplicate "time" column once again; accept either 1 or 2
+        # If two times exist, they will be the first two columns of arr.
+        # Map every requested vector if present.
+        want = [
+            "time", "v(vref)", "v(mem)", "v(comp)", "v(ana)", "v(n_outmix)", "v(sum)",
+            "v(xneu.vdef)", "v(xneu.vtheta)", "v(xneu.vtheta_rel)", "v(xneu.comp_raw)"
+        ]
+        # When there are two 'time' columns, keep the first data time (the second column in arr)
+        idxmap = {}
+        # Build a case-insensitive map
+        lower_map = {n.lower(): i for i, n in enumerate(names)}
+        for key in want:
+            i = lower_map.get(key.lower(), None)
+            if i is not None:
+                # If ngspice wrote two time columns, arr has 1 more column at the front than names suggests.
+                idxmap[key] = i if names[0].lower() != "time" or arr.shape[1] == len(names) else i+1
+        return idxmap
 
-    # We always write base signals in this order from wrdata:
-    # time, vref, vmem, vcomp, vana, v(n_outmix), synapses...
-    if paired_format:
-        val_cols = [2*i+1 for i in range(ncols//2)]
-        time  = arr[:, val_cols[0]]
-        vref  = arr[:, val_cols[1]]
-        vmem  = arr[:, val_cols[2]]
-        vcomp = arr[:, val_cols[3]]
-        vana  = arr[:, val_cols[4]]
-        vcomb = arr[:, val_cols[5]] if len(val_cols) > 5 else None
-        syn   = arr[:, val_cols[6:]] if len(val_cols) > 6 else None
+    idx = build_by_name()
+
+    if idx:
+        time = arr[:, idx["time"]]
+        def get(name): 
+            j = idx.get(name); 
+            return arr[:, j] if j is not None else None
+        vref  = get("v(vref)")
+        vmem  = get("v(mem)")
+        vcomp = get("v(comp)")
+        vana  = get("v(ana)")
+        vcomb = get("v(n_outmix)")
+        vsum  = get("v(sum)")
+        vdef_dbg   = get("v(xneu.vdef)")
+        vtheta_dbg = get("v(xneu.vtheta)") or get("v(xneu.vtheta_rel)")
+        vcomp_raw  = get("v(xneu.comp_raw)")
+
+        # Any remaining columns (spikes) are everything not in idx and not "time"
+        used = set(idx.values())
+        syn_cols = [k for k in range(arr.shape[1]) if k not in used]
+        syn = arr[:, syn_cols] if len(syn_cols) else None
     else:
-        time  = arr[:, 0]
-        vref  = arr[:, 1]
-        vmem  = arr[:, 2]
-        vcomp = arr[:, 3]
-        vana  = arr[:, 4]
-        vcomb = arr[:, 5] if ncols > 5 else None
-        syn   = arr[:, 6:] if ncols > 6 else None
+        # -------- Fallback: original robust pairing detector --------
+        time = arr[:, 0]
+        def is_time(col, tol=1e-12): return np.allclose(col, time, atol=tol, rtol=0)
+        vals_cols, c = [], 1
+        while c < arr.shape[1]:
+            if is_time(arr[:, c]):
+                if c + 1 < arr.shape[1]: vals_cols.append(c + 1)
+                c += 2
+            else:
+                vals_cols.append(c); c += 1
+        vals = arr[:, vals_cols]
+        def col(i): return vals[:, i] if i < vals.shape[1] else None
+        vref  = col(0); vmem = col(1); vcomp = col(2); vana = col(3); vcomb = col(4); vsum = col(5)
+        syn   = vals[:, 6:] if vals.shape[1] > 6 else None
+        vdef_dbg = vtheta_dbg = vcomp_raw = None
 
-    # Derived signals
-    dv = vmem - vref
-    C  = 33e-9
-    Q  = C * dv
+    print(f"Simulated time range: {time[0]:.4f} s → {time[-1]:.4f} s")
 
-    # ---- Synaptic spikes ----
-    if syn is not None and syn.shape[1] > 0:
+    # -------- Sanity print --------
+    def rng(x): 
+        return (float(np.nanmin(x)), float(np.nanmax(x))) if x is not None else None
+    print("Ranges:",
+          f"vref {rng(vref)}  vmem {rng(vmem)}  vcomp {rng(vcomp)}  "
+          f"vana {rng(vana)}  v(n_outmix) {rng(vcomb)}  v(sum) {rng(vsum)}")
+
+    # -------- Basic derived --------
+    dv_rc  = vmem - vref if (vmem is not None and vref is not None) else None
+    if vsum is None and vref is not None: vsum = vref
+    dv_cap = (vmem - vsum) if (vmem is not None and vsum is not None) else None
+    C = 33e-9
+    Q = C * dv_cap if dv_cap is not None else None
+
+    # -------- Plots --------
+    if syn is not None and syn.size:
         plt.figure()
-        for k in range(syn.shape[1]):
-            plt.plot(time*1e3, syn[:, k], label=f"syn{k+1}")
-        plt.title("Synaptic spikes (absolute)")
-        plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)"); plt.grid(True); plt.legend()
-        plt.savefig(f"{png_prefix}_spikes.png", dpi=160); plt.close()
+        for k in range(syn.shape[1]): plt.plot(time*1e3, syn[:, k], label=f"syn{k+1}")
+        plt.title("Synaptic spikes (absolute)"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
+        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_spikes.png", dpi=160); plt.close()
 
-    # ---- Membrane ----
-    plt.figure()
-    plt.plot(time*1e3, vmem, label="Vmem")
-    plt.plot(time*1e3, vref, '--', label="Vref")
-    plt.title("Membrane voltage"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
-    plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_vmem.png", dpi=160); plt.close()
+    if vmem is not None and vref is not None:
+        plt.figure()
+        plt.plot(time*1e3, vmem, label="Vmem")
+        plt.plot(time*1e3, vref, '--', label="Vref")
+        plt.title("Membrane voltage"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
+        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_vmem.png", dpi=160); plt.close()
 
-    # ---- Comparator (digital) output ----
-    plt.figure()
-    plt.plot(time*1e3, vcomp, label="Vcomp (digital output)")
-    plt.title("Digital output (from comparator)")
-    plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)"); plt.grid(True); plt.legend()
-    plt.savefig(f"{png_prefix}_comp.png", dpi=160); plt.close()
+    if vcomp is not None:
+        plt.figure()
+        plt.plot(time*1e3, vcomp, label="Vcomp (comparator out)")
+        plt.title("Digital output (from comparator)"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
+        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_comp.png", dpi=160); plt.close()
 
-    # ---- Analog output ----
-    plt.figure()
-    plt.plot(time*1e3, vana, color="orange", label="Analog output (Vmem - Vref)")
-    plt.title("Analog output"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
-    plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_analog.png", dpi=160); plt.close()
+    if vana is not None:
+        plt.figure()
+        plt.plot(time*1e3, vana, label="Analog out (Vmem - Vref)")
+        plt.title("Analog output"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
+        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_analog.png", dpi=160); plt.close()
 
-    # ---- Combined output after diode mixing ----
     if vcomb is not None:
         plt.figure()
-        plt.plot(time*1e3, vana, label="Analog out (pre-mix)")
-        plt.plot(time*1e3, vcomp, label="Comparator out (pre-mix)")
-        plt.plot(time*1e3, vcomb, '--', linewidth=2, label="Combined output (post diode mix)")
-        plt.title("Hybrid output (analog + digital)")
-        plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
-        plt.grid(True); plt.legend()
-        plt.savefig(f"{png_prefix}_hybrid.png", dpi=160); plt.close()
+        plt.plot(time*1e3, vcomb, '--', linewidth=2, label="Combined (post-diode mix)")
+        if vcomp is not None: plt.plot(time*1e3, vcomp, label="Comparator (pre-mix)")
+        if vana  is not None: plt.plot(time*1e3, vana,  label="Analog (pre-mix)")
+        plt.title("Hybrid output (analog + digital)"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
+        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_hybrid.png", dpi=160); plt.close()
 
-    # ---- Membrane charge ----
-    plt.figure()
-    plt.plot(time*1e3, Q, label="Charge Q = C·ΔV")
-    plt.title("Membrane charge accumulation")
-    plt.xlabel("Time (ms)"); plt.ylabel("Coulombs")
-    plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_charge.png", dpi=160); plt.close()
+    if dv_rc is not None or dv_cap is not None:
+        plt.figure()
+        if dv_rc  is not None:  plt.plot(time*1e3, dv_rc,  label="ΔV (Vmem - Vref) [RC]")
+        if dv_cap is not None:  plt.plot(time*1e3, dv_cap, label="Vcap = Vmem - Vsum [TIA]")
+        plt.title("Membrane / integrator deltas"); plt.xlabel("Time (ms)"); plt.ylabel("Volts (V)")
+        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_deltas.png", dpi=160); plt.close()
 
+    if Q is not None:
+        plt.figure()
+        plt.plot(time*1e3, Q, label="Charge Q = C·(Vmem - Vsum)")
+        plt.title("Membrane charge accumulation"); plt.xlabel("Time (ms)"); plt.ylabel("Coulombs")
+        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_charge.png", dpi=160); plt.close()
+
+    # -------- Optional comparator debug (if we exported it) --------
+    if vdef_dbg is not None or (vtheta_dbg is not None):
+        plt.figure()
+        if vdef_dbg   is not None: plt.plot(time*1e3, vdef_dbg,   label="vdef  = Vref - Vmem")
+        if vtheta_dbg is not None: plt.plot(time*1e3, vtheta_dbg, label="vtheta (rel)")
+        if (vdef_dbg is not None) and (vtheta_dbg is not None):
+            plt.plot(time*1e3, vdef_dbg - vtheta_dbg, label="margin (vdef - vtheta)")
+        if vcomp_raw is not None:
+            plt.plot(time*1e3, vcomp_raw, '--', label="comp_raw (internal)")
+        if vcomp is not None:
+            plt.plot(time*1e3, vcomp, ':', label="comp_out (pin)")
+        plt.title("Comparator internals"); plt.xlabel("Time (ms)"); plt.ylabel("Volts (V)")
+        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_comp_debug.png", dpi=160); plt.close()
+
+        # Quick sanity: comp should be ~0 or ~VDD most of the time
+        if vcomp is not None:
+            vmin, vmax = float(np.nanmin(vcomp)), float(np.nanmax(vcomp))
+            if not (vmin > -0.1 and vmax < 5.1):  # loose bounds around 0..5
+                print(f"[warn] v(comp) range looks off for a digital node: {vmin:.3g}..{vmax:.3g}")
+
+# ------------------ Main ------------------
 
 def main():
     args = parse_args()
@@ -369,13 +427,16 @@ def main():
         cir_path = os.path.join(outdir, cir_name)
         csv_path = os.path.join(outdir, csv_name)
         csv_abs  = os.path.abspath(csv_path)
+
         netlist = build_netlist(cfgN, cfg, mode, csv_abs)
         with open(cir_path, "w") as f:
             f.write(netlist)
         print(f"Wrote {cir_path}")
+
         if not args.norun:
             log_path = os.path.join(outdir, f"ngspice_{mode}.log")
             rc = run_ngspice(cir_path, log_path)
+
             # If ngspice wrote to CWD, pull it into outputs for plotting
             if rc == 0 and not os.path.exists(csv_path):
                 alt = os.path.abspath(os.path.basename(csv_path))
@@ -384,6 +445,7 @@ def main():
                         shutil.move(alt, csv_path)
                     except Exception:
                         pass
+
             if rc == 0 and os.path.exists(csv_path):
                 print(f"Sim OK -> {csv_path}")
                 try:
@@ -393,15 +455,6 @@ def main():
                     print(f"Plotting failed: {e}")
             else:
                 print(f"ngspice returned {rc}. Check log: {log_path}")
-        # If both requested, and we just finished fast, prompt unless --yes
-        if args.mode == "both" and i == 0 and not args.yes and not args.norun:
-            try:
-                go = input("Run DETAILED model now? [y/N]: ").strip().lower()
-            except EOFError:
-                go = "n"
-            if go != "y":
-                print("Skipping DETAILED run.")
-                break
 
 if __name__ == "__main__":
     main()

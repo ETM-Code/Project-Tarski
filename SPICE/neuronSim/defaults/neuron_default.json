@@ -2,13 +2,11 @@
   "name": "demo_neuron",
   "supplies": {
     "vdd": 5.0,
-    "vref": 2.5,
-    "opa604_vpos": 12.0,
-    "opa604_vneg": -12.0
+    "vref": 2.5
   },
   "membrane": {
     "C_mem_F": 3.3e-08,
-    "R_leak_ohm": 330000.0
+    "R_leak_ohm": 120000.0
   },
   "threshold": {
     "over_vref_V": 0.8,

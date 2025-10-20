@@ -2,90 +2,99 @@
 
 VDD vdd 0 5.0
 VREF vref 0 2.5
-VOPP vpos 0 12.0
-VOPN vneg 0 -12.0
-* ---------- demo_neuron FAST neuron subcircuit ----------
-.subckt demo_neuron_fast mem vref vdd comp_out analog_out
-Cmem mem vref 3.3e-08
-Rleak mem vref 330000.0
-.param VTH0=0.8
-.param HYST=0.05
-.param VLO=0.0 VHI=5.0
-* Behavioral Schmitt-like threshold referenced to Vref
-Bvth vth 0 V = V(vref) + VTH0 + HYST*((V(comp_out)-(VLO+VHI)/2)/(VHI-VLO))
-* Smooth comparator (tanh) to aid convergence
-Bcomp comp_raw 0 V = VLO + (VHI-VLO)*0.5*(1+tanh(2000.0*(V(mem)-V(vth))))
-Rcout comp_raw comp_out 1k
-Ccout comp_out 0 1n
-* Reset path: mem -> series R -> ideal switch -> vref
-Rreset mem reset_node 200.0
-Sreset reset_node vref comp_out 0 SWRESET
-.model SWRESET SW(Ron=0.1 Roff=1e12 Vt=2.5 Vh=0.1)
-* Buffered analog tap of (mem - vref)
-Eana analog_out 0 mem vref 1
-Rana analog_out 0 150
-.ends
-
 * ---------- demo_neuron DETAILED neuron subcircuit ----------
-.subckt demo_neuron_detailed mem vref vdd comp_out vpos vneg analog_out
-* OPA604-like buffer for Vref (unity gain follower)
+.subckt demo_neuron_fast mem vref vdd comp_out analog_out sum
+* Vref buffer (OPA604-like)
 Ebuf vref_buf 0 vref 0 1e5
 Rbuf vref_buf vref 1k
 Cbuf vref 0 80p
-* Tie external vref node to buffered node
-Rvr vref vref_buf 1m
-Cmem mem vref 3.3e-08
-Rleak mem vref 330000.0
-* Divider to set center threshold near Vref+over_vref_V
+Rvr  vref vref_buf 1m
+* TIA op-amp with finite gain and compensation
+Eint mem 0 sum vref 2e5
+Rout_int mem 0 20
+Cint mem 0 5p
+Cmem  mem sum 3.3e-08
+Rleak mem sum 120000.0
+* Divider to place threshold near Vref + over_vref_V
 Rvh  vdd     vth_node 133k
 Rvl  vth_node vref    62k
 Rf   comp_out vth_node 4.19e+06
-* Adaptive threshold: RC to Vref + unidirectional injection from comp_out
 Cadapt vth_node vref 100n
 .model DADAPT D(Is=1e-6 N=1.05 Rs=2 Cjo=1p Eg=0.69)
 Rinj  comp_out ninj 2.2Meg
-Dinj  ninj vth_node DADAPT  ; anode at comp_out side, cathode at vth_node
+Dinj  ninj vth_node DADAPT
 .param VLO=0.0 VHI=5.0
-* Comparator core: input = mem - vth_node - offset
-Bcomp comp_raw 0 V = VLO + (VHI-VLO)*0.5*(1+tanh(2000*( V(mem) - V(vth_node) - 0.003 )))
+Bdef vdef 0 V = V(vref) - V(mem)
+Btheta_rel vtheta_rel 0 V = V(vth_node) - V(vref)
+* Hard comparator: high when vdef > vtheta_rel + offset
+Bcomp comp_raw 0 V = VLO + (VHI - VLO)*u( V(vdef) - ( V(vtheta_rel) + 0.003 ) )
 Rcout comp_raw comp_out 10.0
 Ccout comp_out 0 5e-09
-* Reset path: mem -> Rseries -> (switch Ron/Coff) -> Vref
 Rreset mem reset_node 200.0
 Coff_reset reset_node vref 7e-12
 Sreset reset_node vref comp_out 0 SWMUX
 .model SWMUX SW(Ron=10.0 Roff=1000000000.0 Vt=2.5 Vh=0.1)
-* Buffered analog tap of (mem - vref)
-Eana analog_out 0 mem vref 1
+Eana analog_out 0 vref mem 1
 Rana analog_out 0 150
 .ends
 
+* ---------- demo_neuron DETAILED neuron subcircuit ----------
+.subckt demo_neuron_detailed mem vref vdd comp_out analog_out sum
+* Vref buffer (OPA604-like)
+Ebuf vref_buf 0 vref 0 1e5
+Rbuf vref_buf vref 1k
+Cbuf vref 0 80p
+Rvr  vref vref_buf 1m
+* TIA op-amp with finite gain and compensation
+Eint mem 0 sum vref 2e5
+Rout_int mem 0 20
+Cint mem 0 5p
+Cmem  mem sum 3.3e-08
+Rleak mem sum 120000.0
+* Divider to place threshold near Vref + over_vref_V
+Rvh  vdd     vth_node 133k
+Rvl  vth_node vref    62k
+Rf   comp_out vth_node 4.19e+06
+Cadapt vth_node vref 100n
+.model DADAPT D(Is=1e-6 N=1.05 Rs=2 Cjo=1p Eg=0.69)
+Rinj  comp_out ninj 2.2Meg
+Dinj  ninj vth_node DADAPT
+.param VLO=0.0 VHI=5.0
+Bdef vdef 0 V = V(vref) - V(mem)
+Btheta_rel vtheta_rel 0 V = V(vth_node) - V(vref)
+* Hard comparator: high when vdef > vtheta_rel + offset
+Bcomp comp_raw 0 V = VLO + (VHI - VLO)*u( V(vdef) - ( V(vtheta_rel) + 0.003 ) )
+Rcout comp_raw comp_out 10.0
+Ccout comp_out 0 5e-09
+Rreset mem reset_node 200.0
+Coff_reset reset_node vref 7e-12
+Sreset reset_node vref comp_out 0 SWMUX
+.model SWMUX SW(Ron=10.0 Roff=1000000000.0 Vt=2.5 Vh=0.1)
+Eana analog_out 0 vref mem 1
+Rana analog_out 0 150
+.ends
 
-XNEU mem vref vdd comp vpos vneg ana demo_neuron_detailed
-Ra_out ana n_outmix 1k
-Dout   comp n_outmix D_SCHOTTKY
-Rout_weak n_outmix vref 1Meg
-.model D_SCHOTTKY D(Is=1e-6 N=1.05 Rs=2 Cjo=2p Vj=0.3 M=0.3 Eg=0.69)
-Vsrc_syn1 n_syn1 vref PWL(0.0 0.0 0.005 0.0 0.005001 1.2 0.005999 1.2 0.006 0.0)
+XNEU mem vref vdd comp vpos vneg ana sum demo_neuron_detailed
+Ra_out   ana n_outmix 100
+Diso     comp n_outmix D_SCHOTTKY
+Rload    n_outmix 0 10k
+.model   D_SCHOTTKY D(Is=1e-6 N=1.05 Rs=2 Cjo=2p Vj=0.3 M=0.3 Eg=0.69)
+Vsrc_syn1 n_syn1 vref PWL(0.0 0.0 0.005 0.0 0.005001 1.2 0.005399 1.2 0.0054 0.0)
 
-R_syn1_A n_syn1 n_syn1_w 75
-R_syn1_W n_syn1_w n_syn1_r 10000.0
-D_syn1 n_syn1_r mem D_SCHOTTKY
-Vsrc_syn2 n_syn2 vref PWL(0.0 0.0 0.01 0.0 0.010001 1.2 0.010999 1.2 0.011 0.0 0.012 0.0 0.012001 1.2 0.012999 1.2 0.013 0.0)
+R_syn1 n_syn1 sum 10000.0
+Vsrc_syn2 n_syn2 vref PWL(0.0 0.0 0.0115 0.0 0.011501 1.2 0.011849 1.2 0.01185 0.0 0.017 0.0 0.017001 1.2 0.017349 1.2 0.01735 0.0)
 
-R_syn2_A n_syn2 n_syn2_w 75
-R_syn2_W n_syn2_w n_syn2_r 20000.0
-D_syn2 n_syn2_r mem D_SCHOTTKY
-Vsrc_syn3 n_syn3 vref PWL(0.0 0.0 0.02 0.0 0.020001 1.2 0.021999 1.2 0.022 0.0)
+R_syn2 n_syn2 sum 20000.0
+Vsrc_syn3 n_syn3 vref PWL(0.0 0.0 0.026 0.0 0.026001 1.2 0.026599 1.2 0.0266 0.0 0.034 0.0 0.034001 1.2 0.034599 1.2 0.0346 0.0)
 
-R_syn3_A n_syn3 n_syn3_w 75
-R_syn3_W n_syn3_w n_syn3_r 50000.0
-D_syn3 n_syn3_r mem D_SCHOTTKY
+R_syn3 n_syn3 sum 50000.0
 
 .control
   set filetype=ascii
+  set wr_singlescale
+  set wr_vecnames
   tran 1e-06 0.05
-  wrdata /Users/eoghancollins/Tarskii/SPICE/neuronSim/outputs/lif_detailed.csv time v(vref) v(mem) v(comp) v(ana) v(n_outmix) v(n_syn1) v(n_syn2) v(n_syn3)
+  wrdata /Users/eoghancollins/Tarskii/SPICE/neuronSim/outputs/lif_detailed.csv time v(vref) v(mem) v(comp) v(ana) v(n_outmix) v(sum) v(n_syn1) v(n_syn2) v(n_syn3)
   quit
 .endc
 

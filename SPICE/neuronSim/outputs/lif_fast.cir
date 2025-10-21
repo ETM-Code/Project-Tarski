@@ -16,8 +16,8 @@ Cint mem 0 5p
 Cmem  mem sum 3.3e-08
 Rleak mem sum 120000.0
 * Divider to place threshold near Vref + over_vref_V
-Rvh  vdd     vth_node 133k
-Rvl  vth_node vref    62k
+Rvh  vdd     vth_node 681k
+Rvl  vth_node vref    316k
 Rf   comp_out vth_node 4.19e+06
 Cadapt vth_node vref 100n
 .model DADAPT D(Is=1e-6 N=1.05 Rs=2 Cjo=1p Eg=0.69)
@@ -29,43 +29,7 @@ Btheta_rel vtheta_rel 0 V = V(vth_node) - V(vref)
 * Hard comparator: high when vdef > vtheta_rel + offset
 Bcomp comp_raw 0 V = VLO + (VHI - VLO)*u( V(vdef) - ( V(vtheta_rel) + 0.003 ) )
 Rcout comp_raw comp_out 10.0
-Ccout comp_out 0 5e-09
-Rreset mem reset_node 200.0
-Coff_reset reset_node vref 7e-12
-Sreset reset_node vref comp_out 0 SWMUX
-.model SWMUX SW(Ron=10.0 Roff=1000000000.0 Vt=2.5 Vh=0.1)
-Eana analog_out 0 vref mem 1
-Rana analog_out 0 150
-.ends
-
-* ---------- demo_neuron DETAILED neuron subcircuit ----------
-.subckt demo_neuron_detailed mem vref vdd comp_out analog_out sum
-* Vref buffer (OPA604-like)
-Ebuf vref_buf 0 vref 0 1e5
-Rbuf vref_buf vref 1k
-Cbuf vref 0 80p
-Rvr  vref vref_buf 1m
-* TIA op-amp with finite gain and compensation
-Eint mem 0 sum vref 2e5
-Rout_int mem 0 20
-Cint mem 0 5p
-Cmem  mem sum 3.3e-08
-Rleak mem sum 120000.0
-* Divider to place threshold near Vref + over_vref_V
-Rvh  vdd     vth_node 133k
-Rvl  vth_node vref    62k
-Rf   comp_out vth_node 4.19e+06
-Cadapt vth_node vref 100n
-.model DADAPT D(Is=1e-6 N=1.05 Rs=2 Cjo=1p Eg=0.69)
-Rinj  comp_out ninj 2.2Meg
-Dinj  ninj vth_node DADAPT
-.param VLO=0.0 VHI=5.0
-Bdef vdef 0 V = V(vref) - V(mem)
-Btheta_rel vtheta_rel 0 V = V(vth_node) - V(vref)
-* Hard comparator: high when vdef > vtheta_rel + offset
-Bcomp comp_raw 0 V = VLO + (VHI - VLO)*u( V(vdef) - ( V(vtheta_rel) + 0.003 ) )
-Rcout comp_raw comp_out 10.0
-Ccout comp_out 0 5e-09
+Ccout comp_out 0 4e-09
 Rreset mem reset_node 200.0
 Coff_reset reset_node vref 7e-12
 Sreset reset_node vref comp_out 0 SWMUX

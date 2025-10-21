@@ -18,29 +18,29 @@ vref                                       2.5
 xneu.vref_buf                           250000
 mem                                    2.50027
 sum                                    2.50001
-xneu.vth_node                          3.22009
-comp                               1.75807e-05
-xneu.ninj                              2.19996
+xneu.vth_node                          2.92583
+comp                               1.68783e-05
+xneu.ninj                              2.19986
 xneu.vdef                         -0.000267529
-xneu.vtheta_rel                       0.720087
+xneu.vtheta_rel                       0.425828
 xneu.comp_raw                                0
 xneu.reset_node                        2.50027
 ana                               -0.000267529
-n_outmix                          -0.000263849
+n_outmix                          -0.000263851
 n_syn1                                     2.5
 n_syn2                                     2.5
 n_syn3                                     2.5
-b.xneu.bcomp#branch                1.75807e-06
+b.xneu.bcomp#branch                1.68783e-06
 b.xneu.btheta_rel#branch                     0
 b.xneu.bdef#branch                           0
-e.xneu.eana#branch                 1.82032e-06
+e.xneu.eana#branch                  1.8203e-06
 e.xneu.eint#branch                   -0.125013
 e.xneu.ebuf#branch                -2.49998e+08
 vsrc_syn3#branch                   2.50027e-10
 vsrc_syn2#branch                   6.25067e-10
 vsrc_syn1#branch                   1.25013e-09
 vref#branch                        2.49998e+08
-vdd#branch                        -1.33828e-05
+vdd#branch                        -3.04577e-06
 
 
 No. of Data Rows : 50124

@@ -132,15 +132,18 @@ def build_netlist(cfgN: NetworkConfig, cfg: NeuronConfig, mode: str, out_csv: st
     lines.append(f"VDD vdd 0 {cfg.supplies.vdd}")
     lines.append(f"VREF vref 0 {cfg.supplies.vref}")
 
-    # Include subcircuits (regen on the fly)
-    lines.append(generate_fast_neuron(cfg))
-    lines.append(generate_detailed_neuron(cfg))
+    # Include only the subcircuit for the selected mode (avoid duplicate macro defs)
+    if mode == "fast":
+        lines.append(generate_fast_neuron(cfg))
+    else:
+        lines.append(generate_detailed_neuron(cfg))
 
     # Neuron instance
     if mode == "fast":
         lines.append(f"XNEU mem vref vdd comp ana sum {cfg.name}_fast")
     else:
-        lines.append(f"XNEU mem vref vdd comp vpos vneg ana sum {cfg.name}_detailed")
+        # inside build_netlist()
+        lines.append(f"XNEU mem vref vdd comp ana sum {cfg.name}_detailed")
 
     # --- Hybrid combiner: match PCB ---
     # Analog path: 100 Ω from analog op-amp to the output node

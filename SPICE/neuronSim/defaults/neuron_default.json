@@ -23,7 +23,7 @@
   },
   "comparator": {
     "offset_V": 0.003,
-    "prop_delay_s": 5e-08,
+    "prop_delay_s": 40e-9,
     "vlow_V": 0.0,
     "vhigh_V": 5.0,
     "gain_fast": 2000.0

@@ -138,8 +138,8 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
     beta = cfg.threshold.hysteresis_V / dv_out
 
     s.append("* Divider to place threshold near Vref + over_vref_V\n")
-    s.append("Rvh  vdd     vth_node 133k\n")
-    s.append("Rvl  vth_node vref    62k\n")
+    s.append("Rvh  vdd     vth_node 681k\n")
+    s.append("Rvl  vth_node vref    316k\n")
 
     g_div = (1.0/133000.0) + (1.0/62000.0)
     Rf = (1.0 / (beta * g_div / max(1.0 - beta, 1e-6)))

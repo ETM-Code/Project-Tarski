@@ -13,13 +13,13 @@ Rvr  vref vref_buf 1m
 Eint mem 0 sum vref 2e5
 Rout_int mem 0 20
 Cint mem 0 5p
-Cmem  mem sum 3.3e-08
+Cmem  mem sum 1e-08
 Rleak mem sum 120000.0
 * Divider to place threshold near Vref + over_vref_V
-Rvh  vdd     vth_node 681k
-Rvl  vth_node vref    316k
-Rf   comp_out vth_node 4.19e+06
-Cadapt vth_node vref 100n
+Rvh  vdd     vth_node 3.4e+05
+Rvl  vth_node vref    1.58e+05
+Rf   comp_out vth_node 1.07e+07
+Cadapt vth_node vref 2.2e-08
 .model DADAPT D(Is=1e-6 N=1.05 Rs=2 Cjo=1p Eg=0.69)
 Rinj  comp_out ninj 2.2Meg
 Dinj  ninj vth_node DADAPT
@@ -34,8 +34,15 @@ Rreset mem reset_node 200.0
 Coff_reset reset_node vref 7e-12
 Sreset reset_node vref comp_out 0 SWMUX
 .model SWMUX SW(Ron=10.0 Roff=1000000000.0 Vt=2.5 Vh=0.1)
-Eana analog_out 0 vref mem 1
-Rana analog_out 0 150
+* Analog output stage
+Bdiff ana_in 0 V = V(mem) - V(vref)
+* Inverting amplifier op-amp (OPA-like)
+Eana_opamp ana_opamp_out 0 0 ana_inv_in 1e5
+Rana_int ana_opamp_out analog_out 50
+Cana_comp analog_out 0 2p
+R1_ana ana_in ana_inv_in 1e+04
+R2_ana analog_out ana_inv_in 2e+04
+Rana_load analog_out 0 150.0
 .ends
 
 XNEU mem vref vdd comp ana sum demo_neuron_fast
@@ -45,13 +52,13 @@ Rload    n_outmix 0 10k
 .model   D_SCHOTTKY D(Is=1e-6 N=1.05 Rs=2 Cjo=2p Vj=0.3 M=0.3 Eg=0.69)
 Vsrc_syn1 n_syn1 vref PWL(0.0 0.0 0.005 0.0 0.005001 1.2 0.005399 1.2 0.0054 0.0)
 
-R_syn1 n_syn1 sum 10000.0
+R_syn1 n_syn1 sum 33000.0
 Vsrc_syn2 n_syn2 vref PWL(0.0 0.0 0.0115 0.0 0.011501 1.2 0.011849 1.2 0.01185 0.0 0.017 0.0 0.017001 1.2 0.017349 1.2 0.01735 0.0)
 
-R_syn2 n_syn2 sum 20000.0
+R_syn2 n_syn2 sum 66000.0
 Vsrc_syn3 n_syn3 vref PWL(0.0 0.0 0.026 0.0 0.026001 1.2 0.026599 1.2 0.0266 0.0 0.034 0.0 0.034001 1.2 0.034599 1.2 0.0346 0.0)
 
-R_syn3 n_syn3 sum 50000.0
+R_syn3 n_syn3 sum 165000.0
 
 .control
   set filetype=ascii

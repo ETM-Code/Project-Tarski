@@ -1,16 +1,12 @@
 {
   "name": "demo_neuron",
-  "supplies": {
-    "vdd": 5.0,
-    "vref": 2.5
-  },
-  "membrane": {
-    "C_mem_F": 3.3e-08,
-    "R_leak_ohm": 120000.0
-  },
+  "supplies": { "vdd": 5.0, "vref": 2.5 },
+  "membrane": { "C_mem_F": 1.0e-08, "R_leak_ohm": 120000.0 },
   "threshold": {
     "over_vref_V": 0.8,
-    "hysteresis_V": 0.05
+    "hysteresis_V": 0.05,
+    "C_adapt_F": 2.2e-08,
+    "divider_scale": 0.5
   },
   "reset": {
     "enable": true,
@@ -23,13 +19,19 @@
   },
   "comparator": {
     "offset_V": 0.003,
-    "prop_delay_s": 40e-9,
+    "prop_delay_s": 4.0e-08,
     "vlow_V": 0.0,
     "vhigh_V": 5.0,
     "gain_fast": 2000.0
   },
-  "simulation": {
-    "tstop_s": 0.05,
-    "tstep_s": 1e-06
-  }
+  "analog_out": { 
+    "gain": 2.0, 
+    "sign": 1, 
+    "clamp_to_rails": false, 
+    "analog_out_R_ohm": 150.0,
+    "inverting": true,
+    "R1_ohm": 10000.0,
+    "R2_ohm": 40000.0
+  },
+  "simulation": { "tstop_s": 0.05, "tstep_s": 1e-06 }
 }

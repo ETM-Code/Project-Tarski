@@ -10,7 +10,7 @@ This file builds the NEURON subckts. The network (spikes/synapses) is in lif_net
 """
 from __future__ import annotations
 import json, argparse, os, textwrap
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # -------------------- Config dataclasses --------------------
 
@@ -28,7 +28,8 @@ class Membrane:
 class Threshold:
     over_vref_V: float       # center above Vref (e.g., 0.8V)
     hysteresis_V: float      # total span (e.g., 0.05V -> ±25 mV)
-
+    C_adapt_F: float = 100e-9          # was hard-coded 100n
+    divider_scale: float = 1.0         # scale Rvh/Rvl/Rf together (e.g., 0.5 → 2× faster)
 @dataclass
 class ResetPath:
     enable: bool
@@ -53,6 +54,27 @@ class SimCfg:
     tstep_s: float
 
 @dataclass
+class AnalogOutCfg:
+    """
+    Configuration for the analog output buffer/amplifier stage.
+    
+    Inverting topology:
+        Vin = (Vmem - Vref) or (Vref - Vmem) depending on 'sign'
+        Vout = -gain * Vin (inverted)
+        Circuit: op-amp in inverting configuration with gain = -R2/R1
+    
+    Non-inverting topology (legacy):
+        Vout = gain * Vin (same polarity)
+        Circuit: op-amp in non-inverting configuration with gain = 1 + R2/R1
+    """
+    gain: float = 1.0        # magnitude of gain (|Vout/Vin|)
+    sign: int = 1           # +1 => input is (Vmem - Vref),  -1 => input is (Vref - Vmem)
+    clamp_to_rails: bool = False  # add diode clamps to [0, VDD]
+    analog_out_R_ohm: float = 150.0  # output load resistance
+    inverting: bool = True   # True => inverting amplifier, False => non-inverting
+    R1_ohm: float = 10e3     # input resistor (inverting) or ground resistor (non-inverting)
+    R2_ohm: float = 10e3     # feedback resistor (gain = R2/R1 for inverting, 1+R2/R1 for non-inv)
+@dataclass
 class NeuronConfig:
     name: str
     supplies: Supplies
@@ -61,6 +83,7 @@ class NeuronConfig:
     reset: ResetPath
     comparator: ComparatorCfg
     simulation: SimCfg
+    analog_out: AnalogOutCfg = field(default_factory=AnalogOutCfg)
 
     @staticmethod
     def load(json_path: str) -> "NeuronConfig":
@@ -74,6 +97,7 @@ class NeuronConfig:
             reset=ResetPath(**d["reset"]),
             comparator=ComparatorCfg(**d["comparator"]),
             simulation=SimCfg(**d["simulation"]),
+            analog_out=AnalogOutCfg(**d.get("analog_out", {})),
         )
 
 # -------------------- Helpers --------------------
@@ -138,16 +162,20 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
     beta = cfg.threshold.hysteresis_V / dv_out
 
     s.append("* Divider to place threshold near Vref + over_vref_V\n")
-    s.append("Rvh  vdd     vth_node 681k\n")
-    s.append("Rvl  vth_node vref    316k\n")
+    scale = cfg.threshold.divider_scale
+    Rvh_val = 681e3 * max(scale, 1e-3)
+    Rvl_val = 316e3 * max(scale, 1e-3)
+    s.append(f"Rvh  vdd     vth_node {Rvh_val:.3g}\n")
+    s.append(f"Rvl  vth_node vref    {Rvl_val:.3g}\n")
 
-    g_div = (1.0/133000.0) + (1.0/62000.0)
+    # Hysteresis feedback resistor sized from target beta using the ACTUAL divider
+    g_div = (1.0/Rvh_val) + (1.0/Rvl_val)
     Rf = (1.0 / (beta * g_div / max(1.0 - beta, 1e-6)))
     Rf_ohm = max(min(Rf, 50e6), 100e3)
     s.append(f"Rf   comp_out vth_node {Rf_ohm:.3g}\n")
 
     # Adaptive threshold injection (one-way from comp_out)
-    s.append("Cadapt vth_node vref 100n\n")
+    s.append(f"Cadapt vth_node vref {cfg.threshold.C_adapt_F}\n")
     s.append(".model DADAPT D(Is=1e-6 N=1.05 Rs=2 Cjo=1p Eg=0.69)\n")
     s.append("Rinj  comp_out ninj 2.2Meg\n")
     s.append("Dinj  ninj vth_node DADAPT\n")
@@ -171,13 +199,70 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
         s.append("Sreset reset_node vref comp_out 0 SWMUX\n")
         s.append(f".model SWMUX SW(Ron={cfg.reset.mux_Ron_ohm} Roff={cfg.reset.mux_Roff_ohm} Vt={cfg.reset.switch_Vt} Vh={cfg.reset.switch_Vh})\n")
 
-    # Analog output (Vmem - Vref) for plotting/hybrid
-    s.append("Eana analog_out 0 vref mem 1\n")
-    s.append("Rana analog_out 0 150\n")
+    # Analog output (scaled (Vmem - Vref) for plotting/hybrid)
+    s.append("* Analog output stage\n")
+    
+    if cfg.analog_out.inverting:
+        # Inverting op-amp amplifier topology
+        # Gain = -R2/R1
+        desired_gain = abs(cfg.analog_out.gain)
+        R1 = cfg.analog_out.R1_ohm
+        R2 = R1 * desired_gain  # gain magnitude = R2/R1
+        
+        # Differential input stage: create Vin = (Vmem - Vref) or (Vref - Vmem)
+        if cfg.analog_out.sign >= 0:
+            s.append("Bdiff ana_in 0 V = V(mem) - V(vref)\n")
+        else:
+            s.append("Bdiff ana_in 0 V = V(vref) - V(mem)\n")
+        
+        # Inverting amplifier with finite gain op-amp model
+        # Op-amp: high gain, finite bandwidth
+        s.append("* Inverting amplifier op-amp (OPA-like)\n")
+        s.append("Eana_opamp ana_opamp_out 0 0 ana_inv_in 1e5\n")  # V+ = 0, V- = ana_inv_in
+        s.append("Rana_int ana_opamp_out analog_out 50\n")  # output impedance
+        s.append("Cana_comp analog_out 0 2p\n")  # compensation cap
+        
+        # Inverting input network
+        s.append(f"R1_ana ana_in ana_inv_in {R1:.3g}\n")  # input resistor
+        s.append(f"R2_ana analog_out ana_inv_in {R2:.3g}\n")  # feedback resistor
+        
+        # Output load
+        s.append(f"Rana_load analog_out 0 {cfg.analog_out.analog_out_R_ohm}\n")
+        
+    else:
+        # Non-inverting op-amp amplifier topology
+        # Gain = 1 + R2/R1
+        desired_gain = abs(cfg.analog_out.gain)
+        R1 = cfg.analog_out.R1_ohm
+        R2 = R1 * max(desired_gain - 1.0, 0.0)  # gain = 1 + R2/R1
+        
+        # Differential input stage: create Vin = (Vmem - Vref) or (Vref - Vmem)
+        if cfg.analog_out.sign >= 0:
+            s.append("Bdiff ana_in 0 V = V(mem) - V(vref)\n")
+        else:
+            s.append("Bdiff ana_in 0 V = V(vref) - V(mem)\n")
+        
+        # Non-inverting amplifier with finite gain op-amp model
+        s.append("* Non-inverting amplifier op-amp (OPA-like)\n")
+        s.append("Eana_opamp ana_opamp_out 0 ana_in ana_fb 1e5\n")
+        s.append("Rana_int ana_opamp_out analog_out 50\n")
+        s.append("Cana_comp analog_out 0 2p\n")
+        
+        # Feedback network: R2 from output to feedback node, R1 from feedback to ground
+        s.append(f"R2_ana analog_out ana_fb {R2:.3g}\n")
+        s.append(f"R1_ana ana_fb 0 {R1:.3g}\n")
+        
+        # Output load
+        s.append(f"Rana_load analog_out 0 {cfg.analog_out.analog_out_R_ohm}\n")
+
+    if cfg.analog_out.clamp_to_rails:
+        # simple diode clamps to 0..VDD so the output can't swing to infinity
+        s.append(".model DCLAMP D(Is=1e-15 N=1.8 Rs=1)\n")
+        s.append("Dcl_lo  0   analog_out DCLAMP\n")
+        s.append("Dcl_hi  analog_out vdd DCLAMP\n")
 
     s.append(".ends\n")
     return "".join(s)
-
 # -------------------- CLI --------------------
 
 def main():

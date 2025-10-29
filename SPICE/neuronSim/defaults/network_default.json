@@ -5,15 +5,15 @@
     {
       "name": "syn1",
       "type": "excitatory",
-      "weight_ohm": 10000,
+      "weight_ohm": 33000,
       "spikes": [
-        { "t_ms": 5.0,  "width_ms": 0.4, "amp_V": 1.2 }
+        { "t_ms": 5.0, "width_ms": 0.4, "amp_V": 1.2 }
       ]
     },
     {
       "name": "syn2",
       "type": "excitatory",
-      "weight_ohm": 20000,
+      "weight_ohm": 66000,
       "spikes": [
         { "t_ms": 11.5, "width_ms": 0.35, "amp_V": 1.2 },
         { "t_ms": 17.0, "width_ms": 0.35, "amp_V": 1.2 }
@@ -22,7 +22,7 @@
     {
       "name": "syn3",
       "type": "excitatory",
-      "weight_ohm": 50000,
+      "weight_ohm": 165000,
       "spikes": [
         { "t_ms": 26.0, "width_ms": 0.6, "amp_V": 1.2 },
         { "t_ms": 34.0, "width_ms": 0.6, "amp_V": 1.2 }

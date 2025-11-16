@@ -65,7 +65,7 @@ R_syn3 n_syn3 sum 165000.0
   set wr_singlescale
   set wr_vecnames
   tran 1e-06 0.05
-  wrdata /Users/eoghancollins/Tarskii/SPICE/neuronSim/outputs/lif_fast.csv time v(vref) v(mem) v(comp) v(ana) v(n_outmix) v(sum) v(n_syn1) v(n_syn2) v(n_syn3)
+  wrdata /Users/eoghancollins/Tarskii/SPICE/neuronSim/outputs/lif_fast.csv time v(vref) v(mem) v(comp) v(ana) v(n_outmix) v(sum) v(n_syn1) v(n_syn2) v(n_syn3) i(VDD) i(VREF)
   quit
 .endc
 

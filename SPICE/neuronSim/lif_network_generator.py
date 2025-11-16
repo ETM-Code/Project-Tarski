@@ -9,8 +9,7 @@ Usage:
 from __future__ import annotations
 import json, argparse, os, subprocess, shutil, math, textwrap, sys
 from dataclasses import dataclass, field
-from typing import List, Dict
-import csv
+from typing import List, Dict, Optional, Any
 
 try:
     import numpy as np
@@ -65,6 +64,19 @@ class NetworkConfig:
             spikes=[Spike(**sp) for sp in s.get("spikes",[])]
         ) for s in d.get("synapses",[])]
         return NetworkConfig(title=d.get("title","lif_network"), neuron_json=d["neuron_json"], synapses=synapses)
+
+@dataclass
+class SimData:
+    time: Any
+    vectors: Dict[str, Any]
+    names: Optional[List[str]]
+    raw: Any
+    source: str = "fallback"
+    labels: Dict[str, str] = field(default_factory=dict)
+
+    def get(self, name: str) -> Any:
+        """Case-insensitive accessor for a recorded vector."""
+        return self.vectors.get(name.strip().lower())
 
 # ------------------ Utilities ------------------
 
@@ -166,6 +178,10 @@ def build_netlist(cfgN: NetworkConfig, cfg: NeuronConfig, mode: str, out_csv: st
         signals.append(f"v(n_{syn.name})")
         lines.append(f"R_{syn.name} n_{syn.name} sum {syn.weight_ohm}")
 
+    # Record supply currents for power estimation
+    signals.append("i(VDD)")
+    signals.append("i(VREF)")
+
     # Control block (single time column)
     lines.append(head_controls_csv(out_csv, cfg.simulation.tstep_s, cfg.simulation.tstop_s, signals))
     lines.append(".end\n")
@@ -231,121 +247,152 @@ def safety_and_math_validation(cfgN: NetworkConfig, cfg: NeuronConfig) -> Dict[s
         lines.append(f"Reset path: I≈{ireset*1e3:.2f} mA/V. With 1 V delta, {ireset*1e3:.2f} mA flows.")
     return {"text":"\n".join(lines)}
 
-# ------------------ Plotter ------------------
+# ------------------ CSV helpers ------------------
 
-def plot_results(csv_path: str, png_prefix: str):
-    import numpy as np, matplotlib.pyplot as plt
+def canonical_signal_name(name: str) -> str:
+    return name.strip().lower()
 
-    # -------- Load file, grab vector names if present, collect numeric rows --------
+
+def load_sim_data(csv_path: str) -> SimData:
+    import numpy as np
+
     names = None
     rows = []
     with open(csv_path, "r") as f:
         for line in f:
             s = line.strip()
-            if not s:
+            if not s or s.startswith("*"):
                 continue
-            # Header with vector names (enabled by set wr_vecnames)
-            if s.lower().startswith("index "):          # e.g., "Index   time   v(vref)  ..."
-                parts = s.split()
-                # Some ngspice builds write "Index" then vector names; first is "Index", second "time"
-                names = [p for p in parts[1:]]          # drop "Index"
+            parts = s.split()
+            if not parts:
                 continue
-            # Skip comments
-            if s.startswith("*"):
-                continue
-            # Data row
+            if names is None:
+                try:
+                    [float(x) for x in parts]
+                except ValueError:
+                    if parts[0].lower() == "index" and len(parts) > 1:
+                        parts = parts[1:]
+                    names = parts
+                    continue
             try:
-                rows.append([float(x) for x in s.split()])
+                rows.append([float(x) for x in parts])
             except ValueError:
                 pass
 
     arr = np.array(rows, dtype=float)
     if arr.ndim != 2 or arr.size == 0:
-        print(f"CSV parse error: got shape {arr.shape}")
-        return
+        raise ValueError(f"CSV parse error: got shape {arr.shape}")
 
-    # -------- Recover columns by name (preferred) or by layout fallback --------
-    def build_by_name():
-        # With wr_vecnames and wr_singlescale, names should look like:
-        # ["time", "v(vref)", "v(mem)", "v(comp)", "v(ana)", "v(n_outmix)", "v(sum)", "v(xneu.vdef)", ...]
-        if names is None:
-            return None
-        # Some ngspice prints duplicate "time" column once again; accept either 1 or 2
-        # If two times exist, they will be the first two columns of arr.
-        # Map every requested vector if present.
-        want = [
-            "time", "v(vref)", "v(mem)", "v(comp)", "v(ana)", "v(n_outmix)", "v(sum)",
-            "v(xneu.vdef)", "v(xneu.vtheta)", "v(xneu.vtheta_rel)", "v(xneu.comp_raw)"
-        ]
-        # When there are two 'time' columns, keep the first data time (the second column in arr)
-        idxmap = {}
-        # Build a case-insensitive map
-        lower_map = {n.lower(): i for i, n in enumerate(names)}
-        for key in want:
-            i = lower_map.get(key.lower(), None)
-            if i is not None:
-                # If ngspice wrote two time columns, arr has 1 more column at the front than names suggests.
-                idxmap[key] = i if names[0].lower() != "time" or arr.shape[1] == len(names) else i+1
-        return idxmap
+    if names and len(names) + 1 == arr.shape[1]:
+        names = ["index"] + names
+    if names and len(names) != arr.shape[1]:
+        names = None
 
-    idx = build_by_name()
-
-    if idx:
-        time = arr[:, idx["time"]]
-        def get(name): 
-            j = idx.get(name); 
-            return arr[:, j] if j is not None else None
-        vref  = get("v(vref)")
-        vmem  = get("v(mem)")
-        vcomp = get("v(comp)")
-        vana  = get("v(ana)")
-        vcomb = get("v(n_outmix)")
-        vsum  = get("v(sum)")
-        vdef_dbg   = get("v(xneu.vdef)")
-        vtheta_dbg = get("v(xneu.vtheta)") or get("v(xneu.vtheta_rel)")
-        vcomp_raw  = get("v(xneu.comp_raw)")
-
-        # Any remaining columns (spikes) are everything not in idx and not "time"
-        used = set(idx.values())
-        syn_cols = [k for k in range(arr.shape[1]) if k not in used]
-        syn = arr[:, syn_cols] if len(syn_cols) else None
+    vectors: Dict[str, Any] = {}
+    labels: Dict[str, str] = {}
+    if names:
+        for idx, raw_name in enumerate(names):
+            lname = canonical_signal_name(raw_name)
+            if lname == "index":
+                continue
+            vectors[lname] = arr[:, idx]
+            labels[lname] = raw_name
+        time = vectors.get("time", arr[:, 0])
+        source = "named"
     else:
-        # -------- Fallback: original robust pairing detector --------
         time = arr[:, 0]
-        def is_time(col, tol=1e-12): return np.allclose(col, time, atol=tol, rtol=0)
+        vectors["time"] = time
+        labels["time"] = "time"
+
+        def is_time(col, tol=1e-12):
+            return np.allclose(col, time, atol=tol, rtol=0)
+
         vals_cols, c = [], 1
         while c < arr.shape[1]:
             if is_time(arr[:, c]):
-                if c + 1 < arr.shape[1]: vals_cols.append(c + 1)
+                if c + 1 < arr.shape[1]:
+                    vals_cols.append(c + 1)
                 c += 2
             else:
-                vals_cols.append(c); c += 1
-        vals = arr[:, vals_cols]
-        def col(i): return vals[:, i] if i < vals.shape[1] else None
-        vref  = col(0); vmem = col(1); vcomp = col(2); vana = col(3); vcomb = col(4); vsum = col(5)
-        syn   = vals[:, 6:] if vals.shape[1] > 6 else None
-        vdef_dbg = vtheta_dbg = vcomp_raw = None
+                vals_cols.append(c)
+                c += 1
+        vals = arr[:, vals_cols] if vals_cols else arr[:, 1:]
+        base = ["v(vref)", "v(mem)", "v(comp)", "v(ana)", "v(n_outmix)", "v(sum)"]
+
+        def val_col(i):
+            if vals.ndim == 1:
+                return vals if i == 0 else None
+            return vals[:, i] if 0 <= i < vals.shape[1] else None
+
+        for idx, name in enumerate(base):
+            vec = val_col(idx)
+            if vec is not None:
+                cname = canonical_signal_name(name)
+                vectors[cname] = vec
+                labels[cname] = name
+        source = "fallback"
+
+    return SimData(time=time, vectors=vectors, names=names, raw=arr, source=source, labels=labels)
+
+
+# ------------------ Plotter ------------------
+
+def plot_results(csv_path: str, png_prefix: str, synapses: Optional[List[Synapse]] = None, sim_data: Optional[SimData] = None) -> Optional[SimData]:
+    import numpy as np, matplotlib.pyplot as plt
+
+    sim = sim_data or load_sim_data(csv_path)
+    time = sim.time
+    if time is None or len(time) == 0:
+        print(f"CSV parse error: got shape {sim.raw.shape}")
+        return sim
+
+    vref = sim.get("v(vref)")
+    vmem = sim.get("v(mem)")
+    vcomp = sim.get("v(comp)")
+    vana = sim.get("v(ana)")
+    vcomb = sim.get("v(n_outmix)")
+    vsum = sim.get("v(sum)")
+    vdef_dbg = sim.get("v(xneu.vdef)")
+    vtheta_dbg = sim.get("v(xneu.vtheta)") or sim.get("v(xneu.vtheta_rel)")
+    vcomp_raw = sim.get("v(xneu.comp_raw)")
 
     print(f"Simulated time range: {time[0]:.4f} s → {time[-1]:.4f} s")
 
-    # -------- Sanity print --------
-    def rng(x): 
+    def rng(x):
         return (float(np.nanmin(x)), float(np.nanmax(x))) if x is not None else None
+
     print("Ranges:",
           f"vref {rng(vref)}  vmem {rng(vmem)}  vcomp {rng(vcomp)}  "
           f"vana {rng(vana)}  v(n_outmix) {rng(vcomb)}  v(sum) {rng(vsum)}")
 
-    # -------- Basic derived --------
-    dv_rc  = vmem - vref if (vmem is not None and vref is not None) else None
-    if vsum is None and vref is not None: vsum = vref
+    dv_rc = vmem - vref if (vmem is not None and vref is not None) else None
+    if vsum is None and vref is not None:
+        vsum = vref
     dv_cap = (vmem - vsum) if (vmem is not None and vsum is not None) else None
     C = 33e-9
     Q = C * dv_cap if dv_cap is not None else None
 
-    # -------- Plots --------
-    if syn is not None and syn.size:
+    syn_series: List[Any] = []
+    syn_labels: List[str] = []
+    if synapses:
+        for idx, syn in enumerate(synapses, 1):
+            key = canonical_signal_name(f"v(n_{syn.name})")
+            vec = sim.get(key)
+            if vec is None:
+                vec = sim.get(f"v({syn.name})")
+            if vec is not None:
+                syn_series.append(vec)
+                syn_labels.append(syn.name or f"syn{idx}")
+    if not syn_series:
+        for key, label in sim.labels.items():
+            if key.startswith("v(n_") and "syn" in key:
+                syn_series.append(sim.vectors[key])
+                syn_labels.append(label)
+
+    if syn_series:
         plt.figure()
-        for k in range(syn.shape[1]): plt.plot(time*1e3, syn[:, k], label=f"syn{k+1}")
+        for sig, label in zip(syn_series, syn_labels):
+            plt.plot(time*1e3, sig, label=label)
         plt.title("Synaptic spikes (absolute)"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
         plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_spikes.png", dpi=160); plt.close()
 
@@ -371,15 +418,19 @@ def plot_results(csv_path: str, png_prefix: str):
     if vcomb is not None:
         plt.figure()
         plt.plot(time*1e3, vcomb, '--', linewidth=2, label="Combined (post-diode mix)")
-        if vcomp is not None: plt.plot(time*1e3, vcomp, label="Comparator (pre-mix)")
-        if vana  is not None: plt.plot(time*1e3, vana,  label="Analog (pre-mix)")
+        if vcomp is not None:
+            plt.plot(time*1e3, vcomp, label="Comparator (pre-mix)")
+        if vana is not None:
+            plt.plot(time*1e3, vana, label="Analog (pre-mix)")
         plt.title("Hybrid output (analog + digital)"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
         plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_hybrid.png", dpi=160); plt.close()
 
     if dv_rc is not None or dv_cap is not None:
         plt.figure()
-        if dv_rc  is not None:  plt.plot(time*1e3, dv_rc,  label="ΔV (Vmem - Vref) [RC]")
-        if dv_cap is not None:  plt.plot(time*1e3, dv_cap, label="Vcap = Vmem - Vsum [TIA]")
+        if dv_rc is not None:
+            plt.plot(time*1e3, dv_rc, label="ΔV (Vmem - Vref) [RC]")
+        if dv_cap is not None:
+            plt.plot(time*1e3, dv_cap, label="Vcap = Vmem - Vsum [TIA]")
         plt.title("Membrane / integrator deltas"); plt.xlabel("Time (ms)"); plt.ylabel("Volts (V)")
         plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_deltas.png", dpi=160); plt.close()
 
@@ -389,11 +440,12 @@ def plot_results(csv_path: str, png_prefix: str):
         plt.title("Membrane charge accumulation"); plt.xlabel("Time (ms)"); plt.ylabel("Coulombs")
         plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_charge.png", dpi=160); plt.close()
 
-    # -------- Optional comparator debug (if we exported it) --------
-    if vdef_dbg is not None or (vtheta_dbg is not None):
+    if vdef_dbg is not None or vtheta_dbg is not None:
         plt.figure()
-        if vdef_dbg   is not None: plt.plot(time*1e3, vdef_dbg,   label="vdef  = Vref - Vmem")
-        if vtheta_dbg is not None: plt.plot(time*1e3, vtheta_dbg, label="vtheta (rel)")
+        if vdef_dbg is not None:
+            plt.plot(time*1e3, vdef_dbg, label="vdef  = Vref - Vmem")
+        if vtheta_dbg is not None:
+            plt.plot(time*1e3, vtheta_dbg, label="vtheta (rel)")
         if (vdef_dbg is not None) and (vtheta_dbg is not None):
             plt.plot(time*1e3, vdef_dbg - vtheta_dbg, label="margin (vdef - vtheta)")
         if vcomp_raw is not None:
@@ -403,11 +455,128 @@ def plot_results(csv_path: str, png_prefix: str):
         plt.title("Comparator internals"); plt.xlabel("Time (ms)"); plt.ylabel("Volts (V)")
         plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_comp_debug.png", dpi=160); plt.close()
 
-        # Quick sanity: comp should be ~0 or ~VDD most of the time
         if vcomp is not None:
             vmin, vmax = float(np.nanmin(vcomp)), float(np.nanmax(vcomp))
-            if not (vmin > -0.1 and vmax < 5.1):  # loose bounds around 0..5
+            if not (vmin > -0.1 and vmax < 5.1):
                 print(f"[warn] v(comp) range looks off for a digital node: {vmin:.3g}..{vmax:.3g}")
+
+    return sim
+
+
+# ------------------ Power metrics ------------------
+
+POWER_RAIL_SKIPS = {
+    "vref": "reference buffer uses an idealized op-amp, so the supply current is non-physical"
+}
+
+def compute_power_stats(sim: SimData, supplies: Supplies, skip_rails: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
+    import numpy as np
+
+    time = sim.time
+    if time is None or len(time) < 2:
+        return None
+
+    rails = []
+    total_samples = None
+    duration = float(time[-1] - time[0])
+    if duration <= 0:
+        duration = 0.0
+
+    skip_map = {k.lower(): v for k, v in (skip_rails or {}).items()}
+
+    def add_samples(existing, new):
+        if existing is None:
+            return new.copy()
+        return existing + new
+
+    for vec_name, voltage in (("i(vdd)", supplies.vdd), ("i(vref)", supplies.vref)):
+        current = sim.get(vec_name)
+        if current is None:
+            continue
+        inst_power = voltage * (-current)
+        energy = float(np.trapz(inst_power, time))
+        avg_power = energy / duration if duration > 0 else 0.0
+        peak_power = float(np.max(inst_power)) if inst_power.size else 0.0
+        label = vec_name[2:-1].upper() if vec_name.startswith("i(") and vec_name.endswith(")") else vec_name.upper()
+        reason = skip_map.get(label.lower())
+        include = reason is None
+        rails.append({
+            "rail": label,
+            "voltage": voltage,
+            "energy_J": energy,
+            "avg_power_W": avg_power,
+            "peak_power_W": peak_power,
+            "include": include,
+            "reason": reason
+        })
+        if include:
+            total_samples = add_samples(total_samples, inst_power)
+
+    if not rails:
+        return None
+
+    counted = [r for r in rails if r["include"]]
+    total_energy = sum(r["energy_J"] for r in counted)
+    avg_total = total_energy / duration if duration > 0 else 0.0
+    peak_total = float(np.max(total_samples)) if total_samples is not None else 0.0
+
+    return {
+        "rails": rails,
+        "total": {
+            "energy_J": total_energy,
+            "avg_power_W": avg_total,
+            "peak_power_W": peak_total,
+            "counted_rails": len(counted)
+        },
+        "duration_s": duration
+    }
+
+
+def _fmt_watts(value: float) -> str:
+    abs_v = abs(value)
+    if abs_v < 1e-6:
+        return f"{value*1e9:.3g} nW"
+    if abs_v < 1e-3:
+        return f"{value*1e6:.3g} µW"
+    if abs_v < 1:
+        return f"{value*1e3:.3g} mW"
+    return f"{value:.3g} W"
+
+
+def _fmt_energy(value: float) -> str:
+    abs_v = abs(value)
+    if abs_v < 1e-9:
+        return f"{value*1e12:.3g} pJ"
+    if abs_v < 1e-6:
+        return f"{value*1e9:.3g} nJ"
+    if abs_v < 1e-3:
+        return f"{value*1e6:.3g} µJ"
+    if abs_v < 1:
+        return f"{value*1e3:.3g} mJ"
+    return f"{value:.3g} J"
+
+
+def print_power_report(stage: str, stats: Dict[str, Any]) -> None:
+    total = stats["total"]
+    duration = stats.get("duration_s", 0.0)
+    counted = total.get("counted_rails", len(stats["rails"]))
+    if counted:
+        print(
+            f"[power] {stage}: avg {_fmt_watts(total['avg_power_W'])}, peak {_fmt_watts(total['peak_power_W'])}, "
+            f"energy {_fmt_energy(total['energy_J'])} over {duration:.3g} s"
+        )
+    else:
+        print(f"[power] {stage}: no supply rails included in totals (check configuration).")
+    for rail in stats["rails"]:
+        prefix = " " * 9
+        detail = (
+            f"avg {_fmt_watts(rail['avg_power_W'])}, peak {_fmt_watts(rail['peak_power_W'])}, "
+            f"energy {_fmt_energy(rail['energy_J'])} @ {rail['voltage']:.3g} V"
+        )
+        if not rail.get("include", True):
+            reason = rail.get("reason") or "excluded from totals"
+            detail = f"(excluded) {detail} — {reason}"
+        print(f"{prefix}{rail['rail']}: {detail}")
 
 # ------------------ Main ------------------
 
@@ -423,6 +592,7 @@ def main():
 
     # Build & maybe run the requested modes
     wants = ["fast"] if args.mode == "fast" else (["detailed"] if args.mode == "detailed" else ["fast","detailed"])
+    power_reports: List[tuple[str, Dict[str, Any]]] = []
 
     for i,mode in enumerate(wants):
         csv_name = f"lif_{mode}.csv"
@@ -451,13 +621,47 @@ def main():
 
             if rc == 0 and os.path.exists(csv_path):
                 print(f"Sim OK -> {csv_path}")
+                sim_data = None
                 try:
-                    plot_results(csv_path, os.path.join(outdir, f"lif_{mode}"))
+                    sim_data = load_sim_data(csv_path)
+                except Exception as e:
+                    print(f"Failed to pre-load CSV for analysis: {e}")
+
+                try:
+                    sim_data = plot_results(
+                        csv_path,
+                        os.path.join(outdir, f"lif_{mode}"),
+                        synapses=cfgN.synapses,
+                        sim_data=sim_data
+                    )
                     print(f"Plots saved to {outdir}/lif_{mode}_*.png")
                 except Exception as e:
+                    sim_data = None
                     print(f"Plotting failed: {e}")
+
+                if sim_data is not None:
+                    try:
+                        stats = compute_power_stats(sim_data, cfg.supplies, skip_rails=POWER_RAIL_SKIPS)
+                    except Exception as e:
+                        stats = None
+                        print(f"Power analysis failed: {e}")
+                    if stats:
+                        print_power_report(mode.upper(), stats)
+                        power_reports.append((mode, stats))
+                    else:
+                        print(f"[power] {mode}: supply current vectors missing; skipping stats.")
             else:
                 print(f"ngspice returned {rc}. Check log: {log_path}")
+
+    if power_reports:
+        total_energy = sum(stats["total"]["energy_J"] for _, stats in power_reports)
+        total_duration = sum(stats.get("duration_s", 0.0) for _, stats in power_reports)
+        avg_power = total_energy / total_duration if total_duration > 0 else 0.0
+        peak_power = max((stats["total"]["peak_power_W"] for _, stats in power_reports), default=0.0)
+        print(
+            f"[power] cumulative ({len(power_reports)} stages): avg {_fmt_watts(avg_power)}, "
+            f"peak {_fmt_watts(peak_power)}, energy {_fmt_energy(total_energy)} over {total_duration:.3g} s"
+        )
 
 if __name__ == "__main__":
     main()

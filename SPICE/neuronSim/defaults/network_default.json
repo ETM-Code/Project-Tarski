@@ -16,7 +16,8 @@
       "weight_ohm": 66000,
       "spikes": [
         { "t_ms": 11.5, "width_ms": 0.35, "amp_V": 1.2 },
-        { "t_ms": 17.0, "width_ms": 0.35, "amp_V": 1.2 }
+        { "t_ms": 17.0, "width_ms": 0.35, "amp_V": 1.2 },
+        { "t_ms": 22.0, "width_ms": 0.65, "amp_V": 1.2 }
       ]
     },
     {
@@ -25,7 +26,8 @@
       "weight_ohm": 165000,
       "spikes": [
         { "t_ms": 26.0, "width_ms": 0.6, "amp_V": 1.2 },
-        { "t_ms": 34.0, "width_ms": 0.6, "amp_V": 1.2 }
+        { "t_ms": 34.0, "width_ms": 0.6, "amp_V": 1.2 },
+        { "t_ms": 39.0, "width_ms": 0.2, "amp_V": 3.2 }
       ]
     }
   ]

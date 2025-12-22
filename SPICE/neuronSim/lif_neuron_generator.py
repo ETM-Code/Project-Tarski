@@ -74,6 +74,13 @@ class AnalogOutCfg:
     inverting: bool = True   # True => inverting amplifier, False => non-inverting
     R1_ohm: float = 10e3     # input resistor (inverting) or ground resistor (non-inverting)
     R2_ohm: float = 10e3     # feedback resistor (gain = R2/R1 for inverting, 1+R2/R1 for non-inv)
+    bias_current_A: float = 400e-6  # nominal quiescent supply draw of the analog buffer
+
+
+@dataclass
+class BiasCurrents:
+    tia_A: float = 200e-6
+    comparator_A: float = 150e-6
 @dataclass
 class NeuronConfig:
     name: str
@@ -84,6 +91,7 @@ class NeuronConfig:
     comparator: ComparatorCfg
     simulation: SimCfg
     analog_out: AnalogOutCfg = field(default_factory=AnalogOutCfg)
+    bias_currents: BiasCurrents = field(default_factory=BiasCurrents)
 
     @staticmethod
     def load(json_path: str) -> "NeuronConfig":
@@ -98,6 +106,7 @@ class NeuronConfig:
             comparator=ComparatorCfg(**d["comparator"]),
             simulation=SimCfg(**d["simulation"]),
             analog_out=AnalogOutCfg(**d.get("analog_out", {})),
+            bias_currents=BiasCurrents(**d.get("bias_currents", {})),
         )
 
 # -------------------- Helpers --------------------
@@ -154,6 +163,7 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
     s.append("Cint mem 0 5p\n")
     s.append(f"Cmem  mem sum {cfg.membrane.C_mem_F}\n")
     s.append(f"Rleak mem sum {cfg.membrane.R_leak_ohm}\n")
+    s.append(f"Iint_bias vdd 0 {cfg.bias_currents.tia_A}\n")
 
     # Physical hysteresis divider around a threshold node in absolute volts
     vhi = cfg.comparator.vhigh_V
@@ -171,7 +181,9 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
     # Hysteresis feedback resistor sized from target beta using the ACTUAL divider
     g_div = (1.0/Rvh_val) + (1.0/Rvl_val)
     Rf = (1.0 / (beta * g_div / max(1.0 - beta, 1e-6)))
-    Rf_ohm = max(min(Rf, 50e6), 100e3)
+    # Remove the previous upper clamp at 50 MΩ to match the Rust model.
+    # Keep a small lower bound for numerical stability only.
+    Rf_ohm = max(Rf, 100e3)
     s.append(f"Rf   comp_out vth_node {Rf_ohm:.3g}\n")
 
     # Adaptive threshold injection (one-way from comp_out)
@@ -182,15 +194,21 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
 
     # Comparator in deflection space (hard digital with RC shaping)
     s.append(f".param VLO={vlo} VHI={vhi}\n")
+    # Smooth comparator transfer (avoids hard discontinuity that slows the solver)
+    s.append(".param VSW=0.01\n")
+    # Comparator RC shaping: small RC derived from propagation delay (previous behaviour)
     rc   = max(cfg.comparator.prop_delay_s/10.0, 1e-9)
     rout = max(cfg.comparator.prop_delay_s/rc, 10.0)
 
     s.append("Bdef vdef 0 V = V(vref) - V(mem)\n")
     s.append("Btheta_rel vtheta_rel 0 V = V(vth_node) - V(vref)\n")
-    s.append("* Hard comparator: high when vdef > vtheta_rel + offset\n")
-    s.append(f"Bcomp comp_raw 0 V = VLO + (VHI - VLO)*u( V(vdef) - ( V(vtheta_rel) + {cfg.comparator.offset_V} ) )\n")
+    s.append("* Soft comparator: force threshold to the configured over_vref (align with Rust model)\n")
+    s.append(
+        f"Bcomp comp_raw 0 V = VLO + (VHI - VLO)*(0.5*(1 + tanh( ( V(vdef) - ( {cfg.threshold.over_vref_V} + {cfg.comparator.offset_V} ) ) / VSW )))\n"
+    )
     s.append(f"Rcout comp_raw comp_out {rout}\n")
     s.append(f"Ccout comp_out 0 {rc}\n")
+    s.append(f"Icomp_bias vdd 0 {cfg.bias_currents.comparator_A}\n")
 
     # Reset path
     if cfg.reset.enable:
@@ -260,6 +278,8 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
         s.append(".model DCLAMP D(Is=1e-15 N=1.8 Rs=1)\n")
         s.append("Dcl_lo  0   analog_out DCLAMP\n")
         s.append("Dcl_hi  analog_out vdd DCLAMP\n")
+
+    s.append(f"Iana_bias vdd 0 {cfg.analog_out.bias_current_A}\n")
 
     s.append(".ends\n")
     return "".join(s)

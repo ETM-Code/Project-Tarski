@@ -109,7 +109,9 @@ def head_controls_csv(filename_csv: str, tstep: float, tstop: float, signals: Li
       set filetype=ascii
       set wr_singlescale
       set wr_vecnames
-      tran {tstep} {tstop}
+      * Force uniform output grid and small files
+      tran {tstep} {tstop} 0 {tstep}
+      linearize
       wrdata {filename_csv} time {sigs}
       quit
     .endc
@@ -144,6 +146,9 @@ def build_netlist(cfgN: NetworkConfig, cfg: NeuronConfig, mode: str, out_csv: st
     lines.append(f"VDD vdd 0 {cfg.supplies.vdd}")
     lines.append(f"VREF vref 0 {cfg.supplies.vref}")
 
+    # Global simulation options to keep output compact & stable
+    lines.append(".options method=gear maxord=2 reltol=2e-3 trtol=7")
+
     # Include only the subcircuit for the selected mode (avoid duplicate macro defs)
     if mode == "fast":
         lines.append(generate_fast_neuron(cfg))
@@ -176,6 +181,7 @@ def build_netlist(cfgN: NetworkConfig, cfg: NeuronConfig, mode: str, out_csv: st
         sign = +1.0 if syn.type.lower().startswith("excit") else -1.0
         lines.append(gen_spike_source(syn.name, syn.spikes, sign))
         signals.append(f"v(n_{syn.name})")
+        signals.append(f"i(Vsrc_{syn.name})")
         lines.append(f"R_{syn.name} n_{syn.name} sum {syn.weight_ohm}")
 
     # Record supply currents for power estimation
@@ -469,8 +475,12 @@ POWER_RAIL_SKIPS = {
     "vref": "reference buffer uses an idealized op-amp, so the supply current is non-physical"
 }
 
-def compute_power_stats(sim: SimData, supplies: Supplies, skip_rails: Optional[Dict[str, str]] = None) -> Optional[Dict[str, Any]]:
-    import numpy as np
+def compute_power_stats(
+    sim: SimData,
+    supplies: Supplies,
+    skip_rails: Optional[Dict[str, str]] = None,
+    extra_rails: Optional[List[Dict[str, Any]]] = None,
+) -> Optional[Dict[str, Any]]:
 
     time = sim.time
     if time is None or len(time) < 2:
@@ -489,20 +499,59 @@ def compute_power_stats(sim: SimData, supplies: Supplies, skip_rails: Optional[D
             return new.copy()
         return existing + new
 
-    for vec_name, voltage in (("i(vdd)", supplies.vdd), ("i(vref)", supplies.vref)):
+    rail_entries: List[Dict[str, Any]] = [
+        {"label": "VDD", "current_vec": "i(vdd)", "voltage": supplies.vdd},
+        {"label": "VREF", "current_vec": "i(vref)", "voltage": supplies.vref},
+    ]
+    if extra_rails:
+        rail_entries.extend(extra_rails)
+
+    for rail in rail_entries:
+        vec_name = rail.get("current_vec")
+        if not vec_name:
+            continue
         current = sim.get(vec_name)
         if current is None:
             continue
-        inst_power = voltage * (-current)
+
+        voltage_vec = None
+        if rail.get("voltage_vec"):
+            voltage_vec = sim.get(rail["voltage_vec"])
+            if voltage_vec is None:
+                continue
+            if rail.get("voltage_ref"):
+                ref_vec = sim.get(rail["voltage_ref"])
+                if ref_vec is None:
+                    continue
+                voltage_vec = voltage_vec - ref_vec
+        voltage = rail.get("voltage")
+        if voltage_vec is not None:
+            inst_voltage = voltage_vec
+            voltage_report = None
+        else:
+            inst_voltage = voltage
+            voltage_report = voltage
+            if inst_voltage is None:
+                continue
+
+        inst_power = inst_voltage * (-current)
         energy = float(np.trapz(inst_power, time))
         avg_power = energy / duration if duration > 0 else 0.0
         peak_power = float(np.max(inst_power)) if inst_power.size else 0.0
-        label = vec_name[2:-1].upper() if vec_name.startswith("i(") and vec_name.endswith(")") else vec_name.upper()
-        reason = skip_map.get(label.lower())
-        include = reason is None
+        label = rail.get("label") or (vec_name[2:-1].upper() if vec_name.startswith("i(") and vec_name.endswith(")") else vec_name.upper())
+        label_l = label.lower()
+        reason = rail.get("reason")
+        skip_reason = skip_map.get(label_l)
+        if reason is None:
+            reason = skip_reason
+        include = rail.get("include")
+        if include is None:
+            include = skip_reason is None
+        else:
+            include = include and (skip_reason is None)
         rails.append({
             "rail": label,
-            "voltage": voltage,
+            "voltage": voltage_report,
             "energy_J": energy,
             "avg_power_W": avg_power,
             "peak_power_W": peak_power,
@@ -571,8 +620,13 @@ def print_power_report(stage: str, stats: Dict[str, Any]) -> None:
         prefix = " " * 9
         detail = (
             f"avg {_fmt_watts(rail['avg_power_W'])}, peak {_fmt_watts(rail['peak_power_W'])}, "
-            f"energy {_fmt_energy(rail['energy_J'])} @ {rail['voltage']:.3g} V"
+            f"energy {_fmt_energy(rail['energy_J'])}"
         )
+        voltage = rail.get("voltage")
+        if voltage is not None:
+            detail += f" @ {voltage:.3g} V"
+        else:
+            detail += " @ dynamic V"
         if not rail.get("include", True):
             reason = rail.get("reason") or "excluded from totals"
             detail = f"(excluded) {detail} — {reason}"
@@ -641,7 +695,23 @@ def main():
 
                 if sim_data is not None:
                     try:
-                        stats = compute_power_stats(sim_data, cfg.supplies, skip_rails=POWER_RAIL_SKIPS)
+                        extra_rails = []
+                        for syn in cfgN.synapses:
+                            syn_name = syn.name.lower()
+                            extra_rails.append({
+                                "label": f"SRC_{syn.name.upper()}",
+                                "current_vec": f"i(vsrc_{syn_name})",
+                                "voltage_vec": f"v(n_{syn_name})",
+                                "voltage_ref": "v(vref)",
+                                "include": True,
+                                "reason": "synaptic source energy (included)"
+                            })
+                        stats = compute_power_stats(
+                            sim_data,
+                            cfg.supplies,
+                            skip_rails=POWER_RAIL_SKIPS,
+                            extra_rails=extra_rails,
+                        )
                     except Exception as e:
                         stats = None
                         print(f"Power analysis failed: {e}")

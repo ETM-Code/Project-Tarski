@@ -6,7 +6,7 @@
     "over_vref_V": 0.8,
     "hysteresis_V": 0.05,
     "C_adapt_F": 2.2e-08,
-    "divider_scale": 0.5
+    "divider_scale": 5.0
   },
   "reset": {
     "enable": true,
@@ -28,10 +28,12 @@
     "gain": 2.0, 
     "sign": 1, 
     "clamp_to_rails": false, 
-    "analog_out_R_ohm": 150.0,
+    "analog_out_R_ohm": 10000.0,
     "inverting": true,
     "R1_ohm": 10000.0,
-    "R2_ohm": 40000.0
+    "R2_ohm": 40000.0,
+    "bias_current_A": 1.0e-05
   },
+  "bias_currents": { "tia_A": 2.0e-05, "comparator_A": 2.0e-06 },
   "simulation": { "tstop_s": 0.05, "tstep_s": 1e-06 }
 }

@@ -11,21 +11,24 @@ Rout_int mem 0 20
 Cint mem 0 5p
 Cmem  mem sum 1e-08
 Rleak mem sum 120000.0
+Iint_bias vdd 0 2e-05
 * Divider to place threshold near Vref + over_vref_V
-Rvh  vdd     vth_node 3.4e+05
-Rvl  vth_node vref    1.58e+05
-Rf   comp_out vth_node 1.07e+07
+Rvh  vdd     vth_node 3.4e+06
+Rvl  vth_node vref    1.58e+06
+Rf   comp_out vth_node 1.07e+08
 Cadapt vth_node vref 2.2e-08
 .model DADAPT D(Is=1e-6 N=1.05 Rs=2 Cjo=1p Eg=0.69)
 Rinj  comp_out ninj 2.2Meg
 Dinj  ninj vth_node DADAPT
 .param VLO=0.0 VHI=5.0
+.param VSW=0.01
 Bdef vdef 0 V = V(vref) - V(mem)
 Btheta_rel vtheta_rel 0 V = V(vth_node) - V(vref)
-* Hard comparator: high when vdef > vtheta_rel + offset
-Bcomp comp_raw 0 V = VLO + (VHI - VLO)*u( V(vdef) - ( V(vtheta_rel) + 0.003 ) )
+* Soft comparator: tanh() smoothing around threshold (±VSW)
+Bcomp comp_raw 0 V = VLO + (VHI - VLO)*(0.5*(1 + tanh( ( V(vdef) - ( V(vtheta_rel) + 0.003 ) ) / VSW )))
 Rcout comp_raw comp_out 10.0
 Ccout comp_out 0 4e-09
+Icomp_bias vdd 0 2e-06
 Rreset mem reset_node 200.0
 Coff_reset reset_node vref 7e-12
 Sreset reset_node vref comp_out 0 SWMUX
@@ -38,5 +41,6 @@ Rana_int ana_opamp_out analog_out 50
 Cana_comp analog_out 0 2p
 R1_ana ana_in ana_inv_in 1e+04
 R2_ana analog_out ana_inv_in 2e+04
-Rana_load analog_out 0 150.0
+Rana_load analog_out 0 10000.0
+Iana_bias vdd 0 1e-05
 .ends

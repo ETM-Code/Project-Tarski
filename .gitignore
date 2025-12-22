@@ -1,3 +1,6 @@
 .vscode
 **/.DS_Store
 **/__pycache__
+gilgamesh/comparison_outputs/comparison_detailed.json
+.assistant
+.assistant_docs

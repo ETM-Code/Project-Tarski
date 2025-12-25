@@ -1,0 +1,44 @@
+{
+  "name": "demo_neuron_ps",
+  "supplies": { "vdd": 5.0, "vref": 2.5 },
+  "membrane": { "C_mem_F": 1.0e-08, "R_leak_ohm": 120000.0 },
+  "threshold": {
+    "over_vref_V": 0.8,
+    "hysteresis_V": 0.05,
+    "C_adapt_F": 2.2e-08,
+    "divider_scale": 5.0
+  },
+  "reset": {
+    "enable": true,
+    "series_R_ohm": 200.0,
+    "mux_Ron_ohm": 10.0,
+    "mux_Roff_ohm": 1000000000.0,
+    "mux_Coff_F": 7e-12,
+    "switch_Vt": 2.5,
+    "switch_Vh": 0.1
+  },
+  "comparator": {
+    "offset_V": 0.003,
+    "prop_delay_s": 4.0e-08,
+    "vlow_V": 0.0,
+    "vhigh_V": 5.0,
+    "gain_fast": 2000.0
+  },
+  "analog_out": {
+    "gain": 2.0,
+    "sign": 1,
+    "clamp_to_rails": false,
+    "analog_out_R_ohm": 10000.0,
+    "inverting": true,
+    "R1_ohm": 10000.0,
+    "R2_ohm": 40000.0,
+    "bias_current_A": 1.0e-05
+  },
+  "bias_currents": { "tia_A": 2.0e-05, "comparator_A": 2.0e-06 },
+  "simulation": { "tstop_s": 0.05, "tstep_s": 1e-06 },
+  "pulse_stretch": {
+    "enable": true,
+    "R_pw_ohm": 20000.0,
+    "C_pw_F": 1.0e-07
+  }
+}

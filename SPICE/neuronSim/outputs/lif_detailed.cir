@@ -3,8 +3,8 @@
 VDD vdd 0 5.0
 VREF vref 0 2.5
 .options method=gear maxord=2 reltol=2e-3 trtol=7
-* ---------- demo_neuron DETAILED neuron subcircuit ----------
-.subckt demo_neuron_detailed mem vref vdd comp_out analog_out sum
+* ---------- demo_neuron_ps DETAILED neuron subcircuit (with pulse stretching) ----------
+.subckt demo_neuron_ps_detailed mem vref vdd comp_pulse analog_out sum
 * Vref buffer (OPA604-like)
 Ebuf vref_buf 0 vref 0 1e5
 Rbuf vref_buf vref 1k
@@ -34,6 +34,13 @@ Bcomp comp_raw 0 V = VLO + (VHI - VLO)*(0.5*(1 + tanh( ( V(vdef) - ( 0.8 + 0.003
 Rcout comp_raw comp_out 10.0
 Ccout comp_out 0 4e-09
 Icomp_bias vdd 0 2e-06
+
+* Pulse stretching circuit for downstream charge transfer
+* τ_pulse = 1e+05Ω × 1e-07F = 10.00 ms
+.model DPW D(Is=1e-12 N=1.05 Rs=10 Cjo=1p)
+Dpw comp_out comp_pulse DPW
+Rpw comp_pulse 0 1e+05
+Cpw comp_pulse 0 1e-07
 Rreset mem reset_node 200.0
 Coff_reset reset_node vref 7e-12
 Sreset reset_node vref comp_out 0 SWMUX
@@ -50,7 +57,7 @@ Rana_load analog_out 0 10000.0
 Iana_bias vdd 0 1e-05
 .ends
 
-XNEU mem vref vdd comp ana sum demo_neuron_detailed
+XNEU mem vref vdd comp ana sum demo_neuron_ps_detailed
 Ra_out   ana n_outmix 100
 Diso     comp n_outmix D_SCHOTTKY
 Rload    n_outmix 0 10k

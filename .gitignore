@@ -4,3 +4,5 @@
 gilgamesh/comparison_outputs/comparison_detailed.json
 .assistant
 .assistant_docs
+**/*.md
+!**/README*.md

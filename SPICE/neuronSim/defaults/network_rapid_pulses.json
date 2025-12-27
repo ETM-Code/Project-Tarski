@@ -1,0 +1,42 @@
+{
+  "title": "lif_rapid_pulse_test",
+  "neuron_json": "defaults/neuron_pulse_stretch.json",
+  "synapses": [
+    {
+      "name": "syn1",
+      "type": "excitatory",
+      "weight_ohm": 40000,
+      "spikes": [
+        { "t_ms": 5.0, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 5.5, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 6.0, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 6.5, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 7.0, "width_ms": 0.3, "amp_V": 0.5 }
+      ]
+    },
+    {
+      "name": "syn2",
+      "type": "excitatory",
+      "weight_ohm": 45000,
+      "spikes": [
+        { "t_ms": 5.15, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 5.65, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 6.15, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 6.65, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 7.15, "width_ms": 0.3, "amp_V": 0.5 }
+      ]
+    },
+    {
+      "name": "syn3",
+      "type": "excitatory",
+      "weight_ohm": 50000,
+      "spikes": [
+        { "t_ms": 5.3, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 5.8, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 6.3, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 6.8, "width_ms": 0.3, "amp_V": 0.5 },
+        { "t_ms": 7.3, "width_ms": 0.3, "amp_V": 0.5 }
+      ]
+    }
+  ]
+}

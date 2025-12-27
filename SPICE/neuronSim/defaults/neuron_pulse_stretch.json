@@ -39,6 +39,7 @@
   "pulse_stretch": {
     "enable": true,
     "R_pw_ohm": 20000.0,
-    "C_pw_F": 1.0e-07
+    "C_pw_F": 1.0e-07,
+    "R_load_ohm": 10000.0
   }
 }

@@ -81,6 +81,22 @@ class AnalogOutCfg:
 class BiasCurrents:
     tia_A: float = 200e-6
     comparator_A: float = 150e-6
+
+@dataclass
+class PulseStretchCfg:
+    """
+    RC pulse stretch circuit configuration.
+
+    When comparator fires HIGH, diode Dpw forward-biases and charges Cpw to V_peak.
+    When comparator goes LOW, diode reverse-biases and Cpw decays through R_eff.
+
+    R_eff = R_pw || R_load (parallel combination for discharge)
+    tau_eff = R_eff * C_pw
+    """
+    enable: bool = False
+    R_pw_ohm: float = 20000.0      # Pulldown resistor (20kΩ typical)
+    C_pw_F: float = 100e-9         # Pulse capacitor (100nF typical)
+    R_load_ohm: float = 10000.0    # Load resistance (affects discharge rate)
 @dataclass
 class NeuronConfig:
     name: str
@@ -92,11 +108,20 @@ class NeuronConfig:
     simulation: SimCfg
     analog_out: AnalogOutCfg = field(default_factory=AnalogOutCfg)
     bias_currents: BiasCurrents = field(default_factory=BiasCurrents)
+    pulse_stretch: PulseStretchCfg = field(default_factory=PulseStretchCfg)
 
     @staticmethod
     def load(json_path: str) -> "NeuronConfig":
         with open(json_path, "r") as f:
             d = json.load(f)
+        # Parse pulse_stretch config, handling both snake_case and PascalCase keys
+        ps_dict = d.get("pulse_stretch", {})
+        ps_kwargs = {
+            "enable": ps_dict.get("enable", False),
+            "R_pw_ohm": ps_dict.get("R_pw_ohm", ps_dict.get("r_pw_ohm", 20000.0)),
+            "C_pw_F": ps_dict.get("C_pw_F", ps_dict.get("c_pw_f", 100e-9)),
+            "R_load_ohm": ps_dict.get("R_load_ohm", ps_dict.get("r_load_ohm", 10000.0)),
+        }
         return NeuronConfig(
             name=d.get("name","lif_neuron"),
             supplies=Supplies(**d["supplies"]),
@@ -107,6 +132,7 @@ class NeuronConfig:
             simulation=SimCfg(**d["simulation"]),
             analog_out=AnalogOutCfg(**d.get("analog_out", {})),
             bias_currents=BiasCurrents(**d.get("bias_currents", {})),
+            pulse_stretch=PulseStretchCfg(**ps_kwargs),
         )
 
 # -------------------- Helpers --------------------
@@ -200,21 +226,47 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
     rc   = max(cfg.comparator.prop_delay_s/10.0, 1e-9)
     rout = max(cfg.comparator.prop_delay_s/rc, 10.0)
 
-    s.append("Bdef vdef 0 V = V(vref) - V(mem)\n")
+    # Membrane deflection: positive when membrane rises above Vref
+    s.append("Bdef vdef 0 V = V(mem) - V(vref)\n")
     s.append("Btheta_rel vtheta_rel 0 V = V(vth_node) - V(vref)\n")
-    s.append("* Soft comparator: force threshold to the configured over_vref (align with Rust model)\n")
+    # Soft comparator: fires HIGH when vdef > threshold (membrane above Vref + over_vref_V)
+    s.append("* Soft comparator: fires when V(mem) > V(vref) + over_vref_V (align with Rust model)\n")
     s.append(
         f"Bcomp comp_raw 0 V = VLO + (VHI - VLO)*(0.5*(1 + tanh( ( V(vdef) - ( {cfg.threshold.over_vref_V} + {cfg.comparator.offset_V} ) ) / VSW )))\n"
     )
-    s.append(f"Rcout comp_raw comp_out {rout}\n")
-    s.append(f"Ccout comp_out 0 {rc}\n")
+    # Pulse stretch circuit: RC decay after comparator
+    if cfg.pulse_stretch.enable:
+        # Route comparator through pulse stretch circuit
+        # comp_raw -> Rcout -> comp_shaped -> Dpw -> comp_out
+        # Cpw and Rpw provide the RC decay when comparator goes low
+        s.append(f"Rcout comp_raw comp_shaped {rout}\n")
+        s.append(f"Ccout comp_shaped 0 {rc}\n")
+
+        # Pulse stretch diode: charges Cpw when comp_shaped goes HIGH
+        s.append("* Pulse stretch circuit (RC decay)\n")
+        s.append(".model DPW D(Is=1e-12 N=1.05 Rs=10)\n")
+        s.append("Dpw comp_shaped comp_out DPW\n")
+
+        # Pulse stretch capacitor and discharge resistor
+        s.append(f"Cpw comp_out 0 {cfg.pulse_stretch.C_pw_F}\n")
+        s.append(f"Rpw comp_out 0 {cfg.pulse_stretch.R_pw_ohm}\n")
+
+        # Note: R_load is typically external (in the network), but we can add
+        # a parallel path if specified for internal discharge modeling
+    else:
+        # No pulse stretch - direct comparator output
+        s.append(f"Rcout comp_raw comp_out {rout}\n")
+        s.append(f"Ccout comp_out 0 {rc}\n")
+
     s.append(f"Icomp_bias vdd 0 {cfg.bias_currents.comparator_A}\n")
 
-    # Reset path
+    # Reset path - use comp_shaped (raw comparator) for reset control, not stretched output
     if cfg.reset.enable:
         s.append(f"Rreset mem reset_node {cfg.reset.series_R_ohm}\n")
         s.append(f"Coff_reset reset_node vref {cfg.reset.mux_Coff_F}\n")
-        s.append("Sreset reset_node vref comp_out 0 SWMUX\n")
+        # Use comp_shaped for reset control when pulse stretch is enabled
+        reset_control = "comp_shaped" if cfg.pulse_stretch.enable else "comp_out"
+        s.append(f"Sreset reset_node vref {reset_control} 0 SWMUX\n")
         s.append(f".model SWMUX SW(Ron={cfg.reset.mux_Ron_ohm} Roff={cfg.reset.mux_Roff_ohm} Vt={cfg.reset.switch_Vt} Vh={cfg.reset.switch_Vh})\n")
 
     # Analog output (scaled (Vmem - Vref) for plotting/hybrid)

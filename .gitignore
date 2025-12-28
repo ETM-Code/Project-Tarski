@@ -6,3 +6,10 @@ gilgamesh/comparison_outputs/comparison_detailed.json
 .assistant_docs
 **/*.md
 !**/README*.md
+snntorch_reference
+
+# Rust build artifacts
+**/target/
+
+# MNIST data (downloaded separately)
+snntorch_rs/data/

@@ -18,34 +18,33 @@ vref                                       2.5
 xneu.vref_buf                           250000
 mem                                    2.50009
 sum                                    2.50001
-xneu.vth_node                          2.22859
-comp                                 0.0103353
-xneu.ninj                              2.13591
+xneu.vth_node                           2.2259
+comp                               9.82486e-06
+xneu.ninj                              2.13091
 xneu.vdef                          8.97759e-05
-xneu.vtheta_rel                      -0.271413
+xneu.vtheta_rel                      -0.274099
 xneu.comp_raw                                0
-xneu.comp_shaped                   3.26856e-12
 xneu.reset_node                        2.50009
 xneu.ana_in                        8.97759e-05
-xneu.ana_opamp_out                -0.000205055
-xneu.ana_inv_in                    2.05055e-09
+xneu.ana_opamp_out                -0.000182124
+xneu.ana_inv_in                    1.82124e-09
 ana                               -0.000179546
-n_outmix                           -0.00013122
+n_outmix                          -0.000177085
 n_syn1                                     2.5
 n_syn2                                     2.5
 n_syn3                                     2.5
-b.xneu.bdiff#branch               -8.97739e-09
-b.xneu.bcomp#branch                3.26856e-13
+b.xneu.bdiff#branch               -8.97741e-09
+b.xneu.bcomp#branch                9.82486e-07
 b.xneu.btheta_rel#branch                     0
 b.xneu.bdef#branch                           0
-e.xneu.eana_opamp#branch           5.10192e-07
+e.xneu.eana_opamp#branch            5.1546e-08
 e.xneu.eint#branch                   -0.125004
 e.xneu.ebuf#branch                -2.49998e+08
 vsrc_syn3#branch                   7.57603e-11
 vsrc_syn2#branch                   1.89401e-10
 vsrc_syn1#branch                   3.78801e-10
 vref#branch                        2.49998e+08
-vdd#branch                        -3.28151e-05
+vdd#branch                        -3.28159e-05
 
 
 No. of Data Rows : 50094

@@ -39,6 +39,8 @@ class ResetPath:
     series_R_ohm: float
     mux_Ron_ohm: float
     mux_Roff_ohm: float
+    switch_vt: float = 2.5  # Switch threshold voltage
+    switch_vh: float = 0.1  # Switch hysteresis
 
 @dataclass
 class PulseStretchCfg:
@@ -131,22 +133,31 @@ def generate_passive_neuron(cfg: PassiveNeuronConfig) -> str:
     s.append(f"Cmem mem 0 {cfg.membrane.C_mem_F}\n")
     s.append(f"Rleak mem vref {cfg.membrane.R_leak_ohm}\n")
 
-    # Comparator (behavioral - soft tanh for numerical stability)
-    # Fires when mem > vref + threshold
+    # Simple fixed-threshold comparator with very sharp transition
+    # No feedback on threshold - let the reset circuit handle timing
     vth = cfg.threshold.over_vref_V
-    hyst = cfg.threshold.hysteresis_V
+    vdd = cfg.supplies.vdd
+    vref = cfg.supplies.vref
 
-    s.append("\n* Threshold comparator (behavioral, with hysteresis)\n")
-    s.append(f"* Threshold = Vref + {vth:.3f}V = {cfg.supplies.vref + vth:.3f}V\n")
-    s.append(".param VLO=0.0 VHI=5.0\n")
-    s.append(".param VSW=0.02\n")  # Soft transition width
+    vth_abs = vref + vth  # Absolute threshold voltage
 
-    # Comparator: output high when V(mem) > V(vref) + threshold
-    s.append(f"Bcomp comp_raw 0 V = VLO + (VHI - VLO) * (0.5 * (1 + tanh((V(mem) - V(vref) - {vth}) / VSW)))\n")
+    s.append("\n* Fixed-threshold comparator (sharp transition)\n")
+    s.append(f"* Threshold: {vth_abs:.3f}V ({vth:.3f}V above Vref)\n")
 
-    # Small RC on comparator output for stability
-    s.append("Rcomp comp_raw comp_out 10\n")
-    s.append("Ccomp comp_out 0 1p\n")
+    s.append(f"\n.param VLO=0.0 VHI={vdd}\n")
+    s.append(f".param VTH={vth_abs}\n")
+    # Realistic transition based on NCS2250 datasheet:
+    # - 20mV overdrive gives 90ns delay, 100mV gives 50ns
+    # - Use VSW=10mV for realistic CMOS comparator behavior
+    s.append(".param VSW=0.010\n")  # 10mV transition width (realistic)
+
+    # Simple comparator: fires when mem > VTH
+    s.append("Bcomp comp_raw 0 V = VLO + (VHI - VLO) * (0.5 * (1 + tanh((V(mem) - VTH) / VSW)))\n")
+
+    # RC for realistic propagation delay (~50ns per NCS2250)
+    # tau = R*C = 50ns, use R=1k, C=50pF
+    s.append("Rcomp comp_raw comp_out 1000\n")
+    s.append("Ccomp comp_out 0 50p\n")
 
     # Pulse stretching circuit
     if cfg.pulse_stretch.enable:
@@ -160,12 +171,14 @@ def generate_passive_neuron(cfg: PassiveNeuronConfig) -> str:
         s.append("\n* No pulse stretching - direct connection\n")
         s.append("Rpw_bypass comp_out comp_pulse 1\n")
 
-    # Reset path: switch that pulls membrane to Vref when spiking
+    # Reset path: switch controlled by PULSE output (not raw comparator)
+    # The pulse stretcher holds the signal high long enough for proper reset
     if cfg.reset.enable:
         s.append("\n* Reset path (pulls membrane to Vref on spike)\n")
+        s.append("* Switch controlled by comp_pulse (stretched) for stable reset\n")
         s.append(f"Rreset mem reset_node {cfg.reset.series_R_ohm}\n")
-        s.append("Sreset reset_node vref comp_out 0 SWRESET\n")
-        s.append(f".model SWRESET SW(Ron={cfg.reset.mux_Ron_ohm} Roff={cfg.reset.mux_Roff_ohm} Vt=2.5 Vh=0.1)\n")
+        s.append("Sreset reset_node vref comp_pulse 0 SWRESET\n")
+        s.append(f".model SWRESET SW(Ron={cfg.reset.mux_Ron_ohm} Roff={cfg.reset.mux_Roff_ohm} Vt={cfg.reset.switch_vt} Vh={cfg.reset.switch_vh})\n")
 
     s.append("\n.ends\n")
     return "".join(s)

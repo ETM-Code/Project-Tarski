@@ -4,7 +4,7 @@
 gilgamesh/comparison_outputs/comparison_detailed.json
 .assistant
 .assistant_docs
-**/*.md
+**/no*.md
 !**/README*.md
 !**/EMBEDDED_GUIDE.md
 snntorch_reference

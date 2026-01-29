@@ -6,6 +6,7 @@ gilgamesh/comparison_outputs/comparison_detailed.json
 .assistant_docs
 **/*.md
 !**/README*.md
+!**/EMBEDDED_GUIDE.md
 snntorch_reference
 
 # Rust build artifacts

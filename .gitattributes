@@ -1,0 +1,3 @@
+# Mark vendored/generated directories so GitHub excludes them from language stats
+gilgamesh/comparison/venv/** linguist-vendored
+SPICE/venv/** linguist-vendored

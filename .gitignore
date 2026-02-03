@@ -10,6 +10,9 @@ gilgamesh/comparison_outputs/comparison_detailed.json
 !**/EMBEDDED_GUIDE.md
 snntorch_reference
 
+# Python virtual environments
+**/venv/
+
 # Rust build artifacts
 **/target/
 

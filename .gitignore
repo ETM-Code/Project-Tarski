@@ -18,3 +18,8 @@ snntorch_reference
 
 # MNIST data (downloaded separately)
 snntorch_rs/data/
+
+*.mov
+*.mp4
+
+**/gilgamesh_output.txt

@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import os
+import sys
 from pathlib import Path
 
 
@@ -99,6 +101,12 @@ def main() -> int:
         action="store_true",
         help="Display line counts using suffixes like K, M, and B.",
     )
+    parser.add_argument(
+        "-C",
+        "--csv",
+        action="store_true",
+        help="Output results as CSV (columns: lines,file).",
+    )
     args = parser.parse_args()
     if args.count is not None and args.count < 1:
         parser.error("--count must be a positive integer")
@@ -148,6 +156,17 @@ def main() -> int:
 
     shown_rows = rows[: args.count] if args.count is not None else rows
     total_lines = sum(lines for _, lines in shown_rows)
+    if args.csv:
+        try:
+            writer = csv.writer(sys.stdout)
+            writer.writerow(["lines", "file"])
+            for rel, lines in shown_rows:
+                writer.writerow([lines, rel])
+            writer.writerow([total_lines, "TOTAL"])
+        except BrokenPipeError:
+            return 0
+        return 0
+
     formatted_rows = [
         (rel, format_line_count(lines, args.human_readable))
         for rel, lines in shown_rows

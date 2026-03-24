@@ -23,3 +23,5 @@ snntorch_rs/data/
 *.mp4
 
 **/gilgamesh_output.txt
+
+voice

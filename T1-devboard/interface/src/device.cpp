@@ -155,16 +155,23 @@ void Device::Init(time_t timeout_ms)
     pinMode(PIN_L2_MEAS_OUT, INPUT);
 
     // Safe default states.
-    digitalWrite(PIN_LATCH_DAC, LOW);
-    digitalWrite(PIN_PARALLEL_LD, HIGH);
-    digitalWrite(PIN_R_CLK, LOW);
-    digitalWrite(PIN_RESET_SR, LOW);
+    digitalWrite(PIN_LATCH_DAC, LOW);    // LDAC active: DACs update immediately on I2C write
+    digitalWrite(PIN_PARALLEL_LD, HIGH); // 74HC165: shift mode (not loading)
+    digitalWrite(PIN_R_CLK, LOW);        // STCP: no latch
+    digitalWrite(PIN_RESET_SR, LOW);     // SR latch reset: inactive
     digitalWrite(PIN_MOSI, LOW);
     digitalWrite(PIN_SCLK, LOW);
-    digitalWrite(PIN_L2_EN_MEAS, LOW);
+    digitalWrite(PIN_L2_EN_MEAS, LOW);   // Measurement paths disabled
     digitalWrite(PIN_L1_EN_MEAS, LOW);
-    digitalWrite(PIN_OE_S, HIGH);
+    digitalWrite(PIN_OE_S, HIGH);        // Synapse SR outputs disabled during init
+
+    // Clear synapse shift registers to known state on startup.
+    // SRCLR is active-LOW on 74HC595: pulse LOW to clear, then release HIGH.
+    digitalWrite(PIN_SRCLR_S, LOW);
+    delayMicroseconds(1);
     digitalWrite(PIN_SRCLR_S, HIGH);
+    // Latch the cleared state to outputs
+    _PulsePin(PIN_R_CLK);
 
     // Initialize I2C peripheral for MCP4728 DAC communication.
     Wire.begin();
@@ -283,15 +290,16 @@ void Device::LoadWeights(void)
         return;
     }
 
-    digitalWrite(PIN_OE_S, HIGH);
-    digitalWrite(PIN_SRCLR_S, HIGH);
+    digitalWrite(PIN_OE_S, HIGH);    // Disable outputs during shift
+    digitalWrite(PIN_SRCLR_S, HIGH); // Release shift register clear
 
     for(usize i = 0; i < _weights.len; i++)
     {
         shiftOut(PIN_MOSI, PIN_SCLK, MSBFIRST, _weights.data[i]);
     }
 
-    digitalWrite(PIN_OE_S, LOW);
+    _PulsePin(PIN_R_CLK);           // Latch shift register → storage register
+    digitalWrite(PIN_OE_S, LOW);     // Re-enable outputs
     _SendSuccess();
 }
 

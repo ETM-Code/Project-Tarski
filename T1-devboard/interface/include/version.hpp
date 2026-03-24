@@ -7,5 +7,5 @@
 **/
 
 #define FIRM_VER_MJR 0
-#define FIRM_VER_MNR 0
-#define FIRM_VER_PCH 1
+#define FIRM_VER_MNR 1
+#define FIRM_VER_PCH 0

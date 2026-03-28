@@ -43,9 +43,9 @@ R_BOTTOM = 150e3
 THETA_0 = ((V_DD / R_TOP + 2.5 / R_BOTTOM) / (1/R_TOP + 1/R_BOTTOM)) - 2.5
 
 # DAC configuration
-# MCP4728 factory default: internal 2.048V reference, gain=1
-# Firmware does NOT configure EEPROM, so this is what we get
-DAC_VREF = 2.048    # Internal reference voltage
+# MCP4728 factory EEPROM default: VDD reference, gain=1
+# Firmware doesn't change EEPROM, so DAC outputs 0 to VDD
+DAC_VREF = 5.0      # VDD reference (factory default)
 DAC_BITS = 12
 DAC_MAX_CODE = (1 << DAC_BITS) - 1
 NUM_DACS = 9        # 9 hidden neurons

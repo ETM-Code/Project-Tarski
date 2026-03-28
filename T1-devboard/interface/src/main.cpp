@@ -54,6 +54,10 @@ void loop()
             Device::ToggleFlag();
             break;
 
+        case PORT_PROG_DAC:                     // Program MCP4728 I2C address
+            Device::ProgramDACAddress();
+            break;
+
         default:                                // Unknown command
             Device::SendUnknownCommand();
             break;

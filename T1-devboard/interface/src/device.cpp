@@ -442,3 +442,84 @@ void Device::ToggleFlag(void)
 
     _SendSuccess();
 }
+
+void Device::ProgramDACAddress(void)
+{
+    Serial.write(PORT_ACK);
+
+    // Read old and new addresses from host
+    u8 old_addr = 0;
+    u8 new_addr = 0;
+    if(!ReadU8(old_addr) || !ReadU8(new_addr))
+    {
+        _SendFailure();
+        return;
+    }
+
+    // Validate addresses (MCP4728 uses 0x60-0x67, 7-bit)
+    if(old_addr < 0x60 || old_addr > 0x67 || new_addr < 0x60 || new_addr > 0x67)
+    {
+        _SendFailure();
+        return;
+    }
+
+    // MCP4728 address programming sequence (from DS20002532 Section 7.3):
+    //
+    // 1. LDAC must be HIGH initially
+    // 2. General Call Reset: write 0x06 to address 0x00
+    // 3. Wait >1ms
+    // 4. Send "Read Address" command to current address
+    // 5. Pull LDAC LOW during the ACK bit of the second byte
+    // 6. Send new address bits
+    //
+    // Simplified sequence using the "General Call" method:
+    // Step 1: Set LDAC HIGH
+    digitalWrite(PIN_LATCH_DAC, HIGH);
+    delayMicroseconds(100);
+
+    // Step 2: General Call Reset (optional, ensures clean state)
+    Wire.beginTransmission(0x00); // General call address
+    Wire.write(0x06);             // General call reset
+    Wire.endTransmission();
+    delay(1);
+
+    // Step 3: Write new address using the address bits command
+    // Command byte: [1 1 0 0 0 A2 A1 A0] where A2:A0 is the new address bits
+    // The MCP4728 7-bit address is 0b110_0xxx where xxx = A2:A0
+    u8 old_bits = old_addr & 0x07;
+    u8 new_bits = new_addr & 0x07;
+
+    // Address programming I2C frame:
+    // Byte 1 (to old address): 0b0110_0001 | (old_bits << 2) = address command
+    // Byte 2: 0b0110_0010 | (new_bits << 2) = new address bits
+    // Byte 3: 0b0110_0011 | (new_bits << 2) = new address confirmation
+    Wire.beginTransmission(old_addr);
+    Wire.write(0x61 | (old_bits << 2)); // Current address + command
+    Wire.write(0x62 | (new_bits << 2)); // New address bits
+    Wire.write(0x63 | (new_bits << 2)); // Confirm new address
+
+    // Pull LDAC LOW during transmission (timing-critical)
+    digitalWrite(PIN_LATCH_DAC, LOW);
+    delayMicroseconds(1);
+    u8 result = Wire.endTransmission();
+    digitalWrite(PIN_LATCH_DAC, LOW); // Keep LDAC low for normal operation
+
+    if(result != 0)
+    {
+        _SendFailure();
+        return;
+    }
+
+    delay(50); // EEPROM write time
+
+    // Verify: try to communicate with the new address
+    Wire.beginTransmission(new_addr);
+    if(Wire.endTransmission() == 0)
+    {
+        _SendSuccess();
+    }
+    else
+    {
+        _SendFailure();
+    }
+}

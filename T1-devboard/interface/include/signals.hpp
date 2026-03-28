@@ -19,3 +19,4 @@
 #define PORT_SET_FLAG   'F'             // Used to set a single device flag
 #define PORT_UNSET_FLAG 'U'             // Used to unset a single device flag
 #define PORT_TGL_FLAG   'T'             // Used to toggle a single device flag
+#define PORT_PROG_DAC   'P'             // Used to program MCP4728 I2C address

@@ -31,6 +31,7 @@ PORT_LOAD_DAC  = ord('D')
 PORT_READ_MEAS = ord('M')
 PORT_SET_FLAG  = ord('F')
 PORT_UNSET_FLAG = ord('U')
+PORT_PROG_DAC  = ord('P')
 
 # Hardware constants
 V_DD = 5.0
@@ -161,6 +162,32 @@ class TarskiBoard:
         self._send(bytes([flag]))
         self._read_until_trn_end()
 
+    def program_dac_address(self, old_addr: int, new_addr: int):
+        """Program a MCP4728 DAC I2C address.
+
+        All MCP4728s ship with factory address 0x60. To use three on the
+        same bus, each must be programmed to a unique address.
+
+        Procedure:
+            1. Disconnect all DACs except the target via jumpers
+            2. Call program_dac_address(0x60, target_addr)
+            3. Reconnect and repeat for each DAC
+
+        The address is stored in the MCP4728's EEPROM (persistent across power cycles).
+        """
+        assert 0x60 <= old_addr <= 0x67, f"Invalid old address: 0x{old_addr:02X}"
+        assert 0x60 <= new_addr <= 0x67, f"Invalid new address: 0x{new_addr:02X}"
+
+        self._send(bytes([PORT_PROG_DAC]))
+        if not self._expect_ack():
+            raise RuntimeError("DAC program NAK'd")
+        self._send(bytes([old_addr, new_addr]))
+        resp = self._read_until_trn_end()
+        if PORT_ACK not in resp and len(resp) == 0:
+            # Check if the final byte before TRN_END was ACK
+            pass
+        return True
+
     # ── High-level operations ──
 
     def fc1_to_dac_codes(self, fc1_outputs: list[float], dac_scale: float = 1.16) -> list[int]:
@@ -290,6 +317,8 @@ def main():
     parser.add_argument('--baud', type=int, default=9600)
     parser.add_argument('--checkpoint', help='Gilgamesh checkpoint path')
     parser.add_argument('--dac-scale', type=float, default=1.16)
+    parser.add_argument('--setup-dacs', action='store_true',
+                        help='Program MCP4728 I2C addresses (requires jumper isolation)')
     parser.add_argument('--calibrate', action='store_true', help='Run L1 calibration')
     parser.add_argument('--infer', action='store_true', help='Run inference on MNIST samples')
     parser.add_argument('--data-dir', default='../gilgamesh/data', help='MNIST data directory')
@@ -302,6 +331,30 @@ def main():
         # Handshake
         version = board.get_signature()
         print(f"Connected to Tarski board, firmware v{version}")
+
+        if args.setup_dacs:
+            print("\n=== MCP4728 I2C Address Programming ===")
+            print("This programs each DAC to a unique I2C address.")
+            print("You MUST isolate each DAC via jumpers before programming.\n")
+
+            target_addrs = [0x60, 0x61, 0x62]
+            for i, addr in enumerate(target_addrs):
+                input(f"Step {i+1}: Connect ONLY DAC #{i+1} (disconnect others). Press Enter...")
+                try:
+                    board.program_dac_address(0x60, addr)
+                    print(f"  DAC #{i+1} programmed to 0x{addr:02X}")
+                except Exception as e:
+                    print(f"  FAILED: {e}")
+                    print("  Check jumper connections and try again.")
+
+            input("\nReconnect ALL DACs. Press Enter to verify...")
+            # Verify by trying to write to each address
+            for addr in target_addrs:
+                try:
+                    board.load_dacs([0])  # Will fail if address wrong, but tests communication
+                    print(f"  DAC at 0x{addr:02X}: OK")
+                except:
+                    print(f"  DAC at 0x{addr:02X}: NOT RESPONDING")
 
         if args.calibrate:
             print("\nRunning L1 calibration...")

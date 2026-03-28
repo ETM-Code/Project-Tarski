@@ -96,4 +96,21 @@ namespace Device
      * Toggle a single device flag to enable or disable a feature.
      */
     void ToggleFlag(void);
+
+    /**
+     * Program a MCP4728 DAC I2C address.
+     *
+     * All MCP4728s ship with factory address 0x60. To use multiple DACs on the
+     * same I2C bus, each must be programmed to a unique address (0x60-0x67).
+     *
+     * Procedure (requires jumpers to isolate each DAC):
+     *   1. Disconnect all DACs except the one being programmed
+     *   2. Send PORT_PROG_DAC command with old_address and new_address
+     *   3. The Arduino handles the LDAC-based address programming sequence
+     *   4. Reconnect all DACs and repeat for the next one
+     *
+     * Protocol: Host sends [old_address, new_address] after ACK.
+     * The MCP4728 stores the new address in its EEPROM (persistent).
+     */
+    void ProgramDACAddress(void);
 };  

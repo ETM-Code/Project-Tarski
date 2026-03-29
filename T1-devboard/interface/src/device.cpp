@@ -599,58 +599,134 @@ void Device::ProgramDACAddress(void)
         return;
     }
 
-    // MCP4728 address programming sequence (from DS20002532 Section 7.3):
+    // MCP4728 address programming (DS20002532 Section 7.3).
     //
-    // 1. LDAC must be HIGH initially
-    // 2. General Call Reset: write 0x06 to address 0x00
-    // 3. Wait >1ms
-    // 4. Send "Read Address" command to current address
-    // 5. Pull LDAC LOW during the ACK bit of the second byte
-    // 6. Send new address bits
+    // This requires bit-banging I2C because LDAC must be toggled at a
+    // precise point DURING the I2C transaction — between the 8th and 9th
+    // SCL clock of byte 2. The Wire library can't do this.
     //
-    // Simplified sequence using the "General Call" method:
-    // Step 1: Set LDAC HIGH
-    digitalWrite(PIN_LATCH_DAC, HIGH);
-    delayMicroseconds(100);
+    // Protocol:
+    //   1. LDAC HIGH
+    //   2. START condition
+    //   3. Send current address byte (write): [1100_A2A1A0_0]
+    //   4. Wait for ACK
+    //   5. Send command byte 1: [0110_0001] | (old_bits << 2)
+    //   6. Wait for ACK
+    //   7. Send command byte 2: [0110_0010] | (new_bits << 2)
+    //   8. After 8th SCL clock of byte 2, pull LDAC LOW before 9th clock (ACK)
+    //   9. Wait for ACK
+    //   10. Send command byte 3: [0110_0011] | (new_bits << 2)
+    //   11. Wait for ACK
+    //   12. STOP condition
 
-    // Step 2: General Call Reset (optional, ensures clean state)
-    Wire.beginTransmission(0x00); // General call address
-    Wire.write(0x06);             // General call reset
-    Wire.endTransmission();
-    delay(1);
+    // Disable Wire library to take manual control of SDA/SCL
+    Wire.end();
 
-    // Step 3: Write new address using the address bits command
-    // Command byte: [1 1 0 0 0 A2 A1 A0] where A2:A0 is the new address bits
-    // The MCP4728 7-bit address is 0b110_0xxx where xxx = A2:A0
+    const u8 sda_pin = PIN_I2C_SDA;
+    const u8 scl_pin = PIN_I2C_SCL;
+
+    pinMode(sda_pin, OUTPUT);
+    pinMode(scl_pin, OUTPUT);
+    digitalWrite(sda_pin, HIGH);
+    digitalWrite(scl_pin, HIGH);
+
     u8 old_bits = old_addr & 0x07;
     u8 new_bits = new_addr & 0x07;
 
-    // Address programming I2C frame:
-    // Byte 1 (to old address): 0b0110_0001 | (old_bits << 2) = address command
-    // Byte 2: 0b0110_0010 | (new_bits << 2) = new address bits
-    // Byte 3: 0b0110_0011 | (new_bits << 2) = new address confirmation
-    Wire.beginTransmission(old_addr);
-    Wire.write(0x61 | (old_bits << 2)); // Current address + command
-    Wire.write(0x62 | (new_bits << 2)); // New address bits
-    Wire.write(0x63 | (new_bits << 2)); // Confirm new address
+    // Helper: clock out one bit on I2C
+    auto i2c_bit = [&](bool bit) {
+        digitalWrite(sda_pin, bit ? HIGH : LOW);
+        delayMicroseconds(5);
+        digitalWrite(scl_pin, HIGH);
+        delayMicroseconds(5);
+        digitalWrite(scl_pin, LOW);
+        delayMicroseconds(5);
+    };
 
-    // Pull LDAC LOW during transmission (timing-critical)
+    // Helper: clock out one byte, return ACK
+    auto i2c_byte = [&](u8 byte) -> bool {
+        for(int b = 7; b >= 0; b--) {
+            i2c_bit((byte >> b) & 1);
+        }
+        // ACK: release SDA, clock SCL, read SDA
+        pinMode(sda_pin, INPUT_PULLUP);
+        delayMicroseconds(5);
+        digitalWrite(scl_pin, HIGH);
+        delayMicroseconds(5);
+        bool ack = (digitalRead(sda_pin) == LOW);
+        digitalWrite(scl_pin, LOW);
+        pinMode(sda_pin, OUTPUT);
+        delayMicroseconds(5);
+        return ack;
+    };
+
+    // Helper: clock out byte with LDAC toggle before ACK clock
+    auto i2c_byte_with_ldac = [&](u8 byte) -> bool {
+        for(int b = 7; b >= 0; b--) {
+            i2c_bit((byte >> b) & 1);
+        }
+        // CRITICAL: pull LDAC LOW before the ACK clock
+        digitalWrite(PIN_LATCH_DAC, LOW);
+        delayMicroseconds(2);
+        // ACK clock
+        pinMode(sda_pin, INPUT_PULLUP);
+        delayMicroseconds(5);
+        digitalWrite(scl_pin, HIGH);
+        delayMicroseconds(5);
+        bool ack = (digitalRead(sda_pin) == LOW);
+        digitalWrite(scl_pin, LOW);
+        pinMode(sda_pin, OUTPUT);
+        delayMicroseconds(5);
+        return ack;
+    };
+
+    // 1. LDAC HIGH
+    digitalWrite(PIN_LATCH_DAC, HIGH);
+    delayMicroseconds(100);
+
+    // 2. START condition: SDA goes LOW while SCL is HIGH
+    digitalWrite(sda_pin, LOW);
+    delayMicroseconds(5);
+    digitalWrite(scl_pin, LOW);
+    delayMicroseconds(5);
+
+    // 3. Address byte (write): [1100_A2A1A0_0]
+    u8 addr_byte = (old_addr << 1) & 0xFE; // 7-bit address + write bit
+    bool ack1 = i2c_byte(addr_byte);
+
+    // 4. Command byte 1: current address bits
+    u8 cmd1 = 0x61 | (old_bits << 2);
+    bool ack2 = i2c_byte(cmd1);
+
+    // 5. Command byte 2 WITH LDAC toggle: new address bits
+    u8 cmd2 = 0x62 | (new_bits << 2);
+    bool ack3 = i2c_byte_with_ldac(cmd2);
+
+    // 6. Command byte 3: confirm new address
+    u8 cmd3 = 0x63 | (new_bits << 2);
+    bool ack4 = i2c_byte(cmd3);
+
+    // 7. STOP condition: SDA goes HIGH while SCL is HIGH
+    digitalWrite(sda_pin, LOW);
+    delayMicroseconds(5);
+    digitalWrite(scl_pin, HIGH);
+    delayMicroseconds(5);
+    digitalWrite(sda_pin, HIGH);
+    delayMicroseconds(5);
+
+    // Restore LDAC to normal (LOW = immediate update)
     digitalWrite(PIN_LATCH_DAC, LOW);
-    delayMicroseconds(1);
-    u8 result = Wire.endTransmission();
-    digitalWrite(PIN_LATCH_DAC, LOW); // Keep LDAC low for normal operation
 
-    if(result != 0)
-    {
-        _SendFailure();
-        return;
-    }
+    // Re-enable Wire library
+    Wire.begin();
 
     delay(50); // EEPROM write time
 
     // Verify: try to communicate with the new address
     Wire.beginTransmission(new_addr);
-    if(Wire.endTransmission() == 0)
+    bool verified = (Wire.endTransmission() == 0);
+
+    if(verified && ack1 && ack2 && ack3 && ack4)
     {
         _SendSuccess();
     }

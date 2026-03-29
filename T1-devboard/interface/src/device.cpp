@@ -729,9 +729,42 @@ void Device::ProgramDACAddress(void)
     if(verified && ack1 && ack2 && ack3 && ack4)
     {
         _SendSuccess();
+        return;
     }
-    else
+
+    // Retry: power cycle can sometimes be needed.
+    // Try again with a fresh general call reset.
+    Wire.end();
+    delay(10);
+    Wire.begin();
+
+    // General call reset
+    Wire.beginTransmission(0x00);
+    Wire.write(0x06);
+    Wire.endTransmission();
+    delay(5);
+
+    // Re-verify with the new address
+    Wire.beginTransmission(new_addr);
+    if(Wire.endTransmission() == 0)
     {
-        _SendFailure();
+        _SendSuccess();
+        return;
     }
+
+    // Also check if device is still at old address (programming failed)
+    Wire.beginTransmission(old_addr);
+    bool still_at_old = (Wire.endTransmission() == 0);
+
+    // Report detailed status: byte 1 = result code
+    //   0x01 = success (verified at new address)
+    //   0x02 = failed, device still at old address
+    //   0x03 = failed, device not responding at either address
+    //   0x04 = partial ACK failure (I2C framing issue)
+    u8 status = still_at_old ? 0x02 : 0x03;
+    if(!ack1 || !ack2 || !ack3 || !ack4) status = 0x04;
+
+    Serial.write(PORT_NAK);
+    SendU8(status);
+    Serial.write(PORT_TRN_END);
 }

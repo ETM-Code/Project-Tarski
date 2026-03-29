@@ -162,7 +162,8 @@ class TarskiBoard:
         self._send(bytes([flag]))
         self._read_until_trn_end()
 
-    def program_dac_address(self, old_addr: int, new_addr: int):
+    def program_dac_address(self, old_addr: int, new_addr: int,
+                            max_retries: int = 3) -> tuple[bool, str]:
         """Program a MCP4728 DAC I2C address.
 
         All MCP4728s ship with factory address 0x60. To use three on the
@@ -173,20 +174,46 @@ class TarskiBoard:
             2. Call program_dac_address(0x60, target_addr)
             3. Reconnect and repeat for each DAC
 
-        The address is stored in the MCP4728's EEPROM (persistent across power cycles).
+        Returns (success, message). The firmware retries internally and reports
+        detailed status if it fails:
+            0x01 = verified at new address (success)
+            0x02 = failed, device still at old address
+            0x03 = failed, device not responding at either address
+            0x04 = I2C framing issue (ACK missing)
         """
         assert 0x60 <= old_addr <= 0x67, f"Invalid old address: 0x{old_addr:02X}"
         assert 0x60 <= new_addr <= 0x67, f"Invalid new address: 0x{new_addr:02X}"
 
-        self._send(bytes([PORT_PROG_DAC]))
-        if not self._expect_ack():
-            raise RuntimeError("DAC program NAK'd")
-        self._send(bytes([old_addr, new_addr]))
-        resp = self._read_until_trn_end()
-        if PORT_ACK not in resp and len(resp) == 0:
-            # Check if the final byte before TRN_END was ACK
-            pass
-        return True
+        STATUS_MSGS = {
+            0x02: "Device still at old address — LDAC timing may need adjustment",
+            0x03: "Device not responding at either address — check connections",
+            0x04: "I2C framing error — ACK missing during address write",
+        }
+
+        for attempt in range(max_retries):
+            self._send(bytes([PORT_PROG_DAC]))
+            if not self._expect_ack():
+                if attempt < max_retries - 1:
+                    time.sleep(0.5)
+                    continue
+                return False, "Command not acknowledged"
+
+            self._send(bytes([old_addr, new_addr]))
+            resp = self._read_until_trn_end()
+
+            if len(resp) >= 1 and resp[0] == PORT_ACK:
+                return True, f"Programmed 0x{old_addr:02X} → 0x{new_addr:02X}"
+
+            # NAK with status byte
+            if len(resp) >= 2 and resp[0] == PORT_NAK:
+                status = resp[1]
+                msg = STATUS_MSGS.get(status, f"Unknown status 0x{status:02X}")
+                if attempt < max_retries - 1:
+                    time.sleep(1.0)  # Wait before retry
+                    continue
+                return False, f"Failed after {max_retries} attempts: {msg}"
+
+        return False, "Max retries exceeded"
 
     def run_inference(self, num_samples: int = 25, interval_us: int = 1000) -> list[int]:
         """Run inference with rapid spike sampling.
@@ -588,12 +615,15 @@ def main():
             target_addrs = [0x60, 0x61, 0x62]
             for i, addr in enumerate(target_addrs):
                 input(f"Step {i+1}: Connect ONLY DAC #{i+1} (disconnect others). Press Enter...")
-                try:
-                    board.program_dac_address(0x60, addr)
-                    print(f"  DAC #{i+1} programmed to 0x{addr:02X}")
-                except Exception as e:
-                    print(f"  FAILED: {e}")
-                    print("  Check jumper connections and try again.")
+                success, msg = board.program_dac_address(0x60, addr)
+                if success:
+                    print(f"  DAC #{i+1}: {msg}")
+                else:
+                    print(f"  DAC #{i+1} FAILED: {msg}")
+                    retry = input("  Retry? (y/n): ").strip().lower()
+                    if retry == 'y':
+                        success, msg = board.program_dac_address(0x60, addr)
+                        print(f"  Retry: {'OK' if success else 'FAILED'} — {msg}")
 
             input("\nReconnect ALL DACs. Press Enter to verify...")
             # Verify by trying to write to each address

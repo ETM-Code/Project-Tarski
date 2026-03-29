@@ -553,10 +553,15 @@ void Device::CalibL1(void)
     const unsigned long timeout_us = static_cast<unsigned long>(max_wait_ms) * 1000UL;
     u32 elapsed_us = 0xFFFFFFFF; // Default: timeout
 
+    // A6/A7 on ATmega328P are analog-only pins — digitalRead won't work.
+    // Use analogRead with a threshold instead: neuron comparator output
+    // swings from ~0V (no spike) to ~4.5V (spike). ADC returns 0-1023.
+    // Threshold at ~2.5V = ADC value ~512.
+    const u16 spike_threshold = 512;
+
     while((micros() - start_us) < timeout_us)
     {
-        // MEAS_OUT goes HIGH when the neuron's comparator fires
-        if(digitalRead(meas_pin) == HIGH)
+        if(static_cast<u16>(analogRead(meas_pin)) > spike_threshold)
         {
             elapsed_us = static_cast<u32>(micros() - start_us);
             break;

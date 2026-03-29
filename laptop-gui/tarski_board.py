@@ -436,6 +436,99 @@ class TarskiBoard:
         responding = sum(1 for c in spike_counts if c > 0)
         print(f"  {responding}/10 output neurons responding")
 
+        print("\n=== Phase 4: Layer 2 Synapse Calibration ===")
+        print("Programming individual synapses and measuring output response.\n")
+
+        calib['synapse_curves'] = {}
+
+        # For each output neuron, test synapses from hidden neuron 0
+        # (we use H0 as the spike source because we already know its DAC from phase 2)
+        source_ch = active_channels[0] if active_channels else 0
+        max_dac_code = int(round(2.0 / DAC_VREF * DAC_MAX_CODE))
+
+        for output_idx in range(10):
+            print(f"  Testing synapses → O{output_idx}:")
+            curve = []
+
+            for weight in [1, 2, 3, 4, 5, 6, 7]:
+                # Program ONLY synapse source_ch → output_idx to this weight
+                sr_bytes = [0] * NUM_SYNAPSES
+                sr_bytes[source_ch * 10 + output_idx] = self.weight_to_sr_byte(weight)
+                self.load_weights(sr_bytes)
+
+                # Drive hidden neuron at max
+                codes = [0] * 9
+                codes[source_ch] = max_dac_code
+                self.load_dacs(codes)
+                time.sleep(0.001)
+
+                # Sample at 200µs intervals for 25ms = 125 samples
+                snapshots = self.run_inference(125, 200)
+
+                # Find first sample where this output neuron spiked
+                first_spike_sample = None
+                total_spikes = 0
+                for s_idx, word in enumerate(snapshots):
+                    if (word >> output_idx) & 1:
+                        if first_spike_sample is None:
+                            first_spike_sample = s_idx
+                        total_spikes += 1
+
+                spike_time_us = first_spike_sample * 200 if first_spike_sample is not None else None
+                curve.append({
+                    'weight': weight,
+                    'first_spike_us': spike_time_us,
+                    'total_spikes': total_spikes,
+                })
+                t_str = f"{spike_time_us}µs ({total_spikes}×)" if spike_time_us is not None else "no spike"
+                print(f"    w=+{weight}: {t_str}")
+
+                # Zero DACs to reset
+                self.load_dacs([0] * 9)
+                time.sleep(0.005)
+
+            calib['synapse_curves'][output_idx] = curve
+
+        # Test inhibitory synapses: set strong excitatory, add inhibitory, measure reduction
+        print("\n  Testing inhibitory path:")
+        inh_test = []
+        test_output = 0
+        # First: excitatory-only (w=+7)
+        sr_bytes = [0] * NUM_SYNAPSES
+        sr_bytes[source_ch * 10 + test_output] = self.weight_to_sr_byte(7)
+        self.load_weights(sr_bytes)
+        codes = [0] * 9
+        codes[source_ch] = max_dac_code
+        self.load_dacs(codes)
+        time.sleep(0.001)
+        snap_exc = self.run_inference(125, 200)
+        exc_count = sum(1 for w in snap_exc if (w >> test_output) & 1)
+        print(f"    Exc only (w=+7): {exc_count} spikes")
+        self.load_dacs([0] * 9)
+        time.sleep(0.005)
+
+        # Now add inhibitory from a different hidden neuron
+        if len(active_channels) >= 2:
+            inh_source = active_channels[1]
+            sr_bytes[source_ch * 10 + test_output] = self.weight_to_sr_byte(7)    # exc from H0
+            sr_bytes[inh_source * 10 + test_output] = self.weight_to_sr_byte(-7)  # inh from H1
+            self.load_weights(sr_bytes)
+            codes = [0] * 9
+            codes[source_ch] = max_dac_code
+            codes[inh_source] = max_dac_code
+            self.load_dacs(codes)
+            time.sleep(0.001)
+            snap_both = self.run_inference(125, 200)
+            both_count = sum(1 for w in snap_both if (w >> test_output) & 1)
+            print(f"    Exc+Inh (w=+7/-7): {both_count} spikes (was {exc_count})")
+            self.load_dacs([0] * 9)
+            time.sleep(0.005)
+            calib['synapse_test']['inh_test'] = {
+                'exc_only_spikes': exc_count,
+                'exc_plus_inh_spikes': both_count,
+            }
+
+        print("\n=== Calibration Complete ===")
         return calib
 
     def _compute_channel_scale(self, curve: list[tuple], target_time_us: int) -> float:

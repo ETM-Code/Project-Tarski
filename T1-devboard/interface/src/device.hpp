@@ -98,6 +98,45 @@ namespace Device
     void ToggleFlag(void);
 
     /**
+     * Run inference with rapid spike sampling.
+     *
+     * Instead of a single ReadOutput(), this samples the spike latches
+     * repeatedly during the inference window, giving spike count data.
+     *
+     * Protocol: Host sends [num_samples(u8), interval_us_lo(u8), interval_us_hi(u8)].
+     * The Arduino resets the SR latches, then loops num_samples times:
+     *   - Parallel-load 74HC165 (capture latch state)
+     *   - Shift in 16 bits
+     *   - Reset SR latches (so next sample captures new spikes only)
+     *   - Wait interval_us microseconds
+     * Then sends all samples back: num_samples × 2 bytes (little-endian u16).
+     *
+     * DAC values must be loaded BEFORE calling this command.
+     * Weights must be loaded BEFORE calling this command.
+     * The neurons compute continuously from when the DACs are set.
+     */
+    void RunInference(void);
+
+    /**
+     * Layer 1 calibration: measure time to first spike for one hidden neuron.
+     *
+     * Protocol: Host sends [dac_channel(u8), dac_code_lo(u8), dac_code_hi(u8),
+     *                        max_wait_ms_lo(u8), max_wait_ms_hi(u8),
+     *                        meas_channel(u8)].
+     *
+     * The Arduino:
+     *   1. Zeros all DAC channels
+     *   2. Sets the specified channel to the given code
+     *   3. Starts a microsecond timer
+     *   4. Polls the specified MEAS_OUT pin until it goes HIGH or timeout
+     *   5. Returns: elapsed_us as u32 (little-endian), or 0xFFFFFFFF for timeout
+     *
+     * The host must reset the neuron before calling this (e.g., by briefly
+     * zeroing the DAC and waiting for membrane to decay).
+     */
+    void CalibL1(void);
+
+    /**
      * Program a MCP4728 DAC I2C address.
      *
      * All MCP4728s ship with factory address 0x60. To use multiple DACs on the

@@ -20,3 +20,5 @@
 #define PORT_UNSET_FLAG 'U'             // Used to unset a single device flag
 #define PORT_TGL_FLAG   'T'             // Used to toggle a single device flag
 #define PORT_PROG_DAC   'P'             // Used to program MCP4728 I2C address
+#define PORT_RUN_INF    'R'             // Run inference: rapid spike sampling over a time window
+#define PORT_CALIB_L1   'C'             // L1 calibration: set one DAC, measure time to spike

@@ -54,6 +54,14 @@ void loop()
             Device::ToggleFlag();
             break;
 
+        case PORT_RUN_INF:                      // Run inference with rapid spike sampling
+            Device::RunInference();
+            break;
+
+        case PORT_CALIB_L1:                     // L1 calibration: time to spike
+            Device::CalibL1();
+            break;
+
         case PORT_PROG_DAC:                     // Program MCP4728 I2C address
             Device::ProgramDACAddress();
             break;

@@ -443,6 +443,142 @@ void Device::ToggleFlag(void)
     _SendSuccess();
 }
 
+void Device::RunInference(void)
+{
+    Serial.write(PORT_ACK);
+
+    // Read parameters: num_samples, interval_us (u16 little-endian)
+    u8 num_samples = 0;
+    u8 interval_lo = 0;
+    u8 interval_hi = 0;
+    if(!ReadU8(num_samples) || !ReadU8(interval_lo) || !ReadU8(interval_hi))
+    {
+        _SendFailure();
+        return;
+    }
+
+    const u16 interval_us = static_cast<u16>(interval_lo) | (static_cast<u16>(interval_hi) << 8);
+
+    // Cap at 250 samples (500 bytes) to stay within Arduino RAM
+    if(num_samples > 250 || num_samples == 0)
+    {
+        _SendFailure();
+        return;
+    }
+
+    // Buffer for spike snapshots (stored on stack, max 500 bytes)
+    u16 samples[250];
+
+    // Reset SR latches before starting
+    _PulsePin(PIN_RESET_SR);
+
+    // Sample loop: read latches, shift in data, reset latches, wait
+    for(u8 i = 0; i < num_samples; i++)
+    {
+        // Wait the specified interval (neurons are computing during this time)
+        if(i > 0) delayMicroseconds(interval_us);
+
+        // Parallel-load: capture current latch state into 74HC165
+        digitalWrite(PIN_PARALLEL_LD, LOW);
+        digitalWrite(PIN_PARALLEL_LD, HIGH);
+
+        // Shift in 16 bits from the 74HC165 chain
+        samples[i] = _ReadShiftRegisterWord();
+
+        // Reset SR latches so next sample only captures NEW spikes
+        _PulsePin(PIN_RESET_SR);
+    }
+
+    // Send all samples back
+    for(u8 i = 0; i < num_samples; i++)
+    {
+        SendU16(samples[i]);
+    }
+    Serial.write(PORT_TRN_END);
+}
+
+void Device::CalibL1(void)
+{
+    Serial.write(PORT_ACK);
+
+    // Read parameters
+    u8 dac_channel = 0;
+    u8 code_lo = 0, code_hi = 0;
+    u8 wait_lo = 0, wait_hi = 0;
+    u8 meas_channel = 0;
+
+    if(!ReadU8(dac_channel) || !ReadU8(code_lo) || !ReadU8(code_hi) ||
+       !ReadU8(wait_lo) || !ReadU8(wait_hi) || !ReadU8(meas_channel))
+    {
+        _SendFailure();
+        return;
+    }
+
+    const u16 dac_code = static_cast<u16>(code_lo) | (static_cast<u16>(code_hi) << 8);
+    const u16 max_wait_ms = static_cast<u16>(wait_lo) | (static_cast<u16>(wait_hi) << 8);
+
+    // Validate
+    if(dac_channel >= CONF_DAC_COUNT || meas_channel > 1)
+    {
+        _SendFailure();
+        return;
+    }
+
+    // Select measurement pin
+    const u8 meas_pin = (meas_channel == 0) ? PIN_L1_MEAS_OUT : PIN_L2_MEAS_OUT;
+
+    // Enable measurement path
+    if(meas_channel == 0)
+    {
+        digitalWrite(PIN_L1_EN_MEAS, HIGH);
+        digitalWrite(PIN_L2_EN_MEAS, LOW);
+    }
+    else
+    {
+        digitalWrite(PIN_L1_EN_MEAS, LOW);
+        digitalWrite(PIN_L2_EN_MEAS, HIGH);
+    }
+
+    // Zero all DACs first (let neuron membrane reset)
+    for(usize i = 0; i < CONF_DAC_COUNT; i++) _dacs.data[i] = 0;
+    _WriteDACData(CONF_DAC_COUNT);
+    delay(10); // Wait for membrane to decay to resting potential
+
+    // Set the target DAC channel
+    _dacs.data[dac_channel] = dac_code & ((1U << CONF_DAC_BITS) - 1U);
+    _WriteDACData(CONF_DAC_COUNT);
+
+    // Start timing and poll for spike
+    const unsigned long start_us = micros();
+    const unsigned long timeout_us = static_cast<unsigned long>(max_wait_ms) * 1000UL;
+    u32 elapsed_us = 0xFFFFFFFF; // Default: timeout
+
+    while((micros() - start_us) < timeout_us)
+    {
+        // MEAS_OUT goes HIGH when the neuron's comparator fires
+        if(digitalRead(meas_pin) == HIGH)
+        {
+            elapsed_us = static_cast<u32>(micros() - start_us);
+            break;
+        }
+    }
+
+    // Zero the DAC to reset neuron
+    _dacs.data[dac_channel] = 0;
+    _WriteDACData(CONF_DAC_COUNT);
+
+    // Disable measurement path
+    digitalWrite(PIN_L1_EN_MEAS, LOW);
+    digitalWrite(PIN_L2_EN_MEAS, LOW);
+
+    // Send result: 4 bytes (u32 little-endian)
+    SendU8(static_cast<u8>(elapsed_us & 0xFF));
+    SendU8(static_cast<u8>((elapsed_us >> 8) & 0xFF));
+    SendU8(static_cast<u8>((elapsed_us >> 16) & 0xFF));
+    SendU8(static_cast<u8>((elapsed_us >> 24) & 0xFF));
+    Serial.write(PORT_TRN_END);
+}
+
 void Device::ProgramDACAddress(void)
 {
     Serial.write(PORT_ACK);

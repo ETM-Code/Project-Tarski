@@ -188,6 +188,53 @@ class TarskiBoard:
             pass
         return True
 
+    def run_inference(self, num_samples: int = 25, interval_us: int = 1000) -> list[int]:
+        """Run inference with rapid spike sampling.
+
+        DAC values and weights must already be loaded.
+        Returns a list of num_samples 16-bit spike words, one per sampling interval.
+        Each bit in a word indicates whether that output neuron spiked since the last sample.
+
+        To get spike counts: sum the bits across all samples.
+        """
+        assert 1 <= num_samples <= 250
+        self._send(bytes([ord('R')]))  # PORT_RUN_INF
+        if not self._expect_ack():
+            raise RuntimeError("RunInference NAK'd")
+        self._send(bytes([
+            num_samples,
+            interval_us & 0xFF,
+            (interval_us >> 8) & 0xFF,
+        ]))
+        # Read num_samples × 2 bytes + TRN_END
+        samples = []
+        for _ in range(num_samples):
+            data = self._read(2)
+            samples.append(data[0] | (data[1] << 8))
+        self._read(1)  # TRN_END
+        return samples
+
+    def calib_l1_single(self, dac_channel: int, dac_code: int,
+                        max_wait_ms: int = 50, meas_channel: int = 0) -> int | None:
+        """Measure time to first spike for one DAC channel.
+
+        Returns elapsed microseconds, or None if no spike within timeout.
+        """
+        self._send(bytes([ord('C')]))  # PORT_CALIB_L1
+        if not self._expect_ack():
+            raise RuntimeError("CalibL1 NAK'd")
+        self._send(bytes([
+            dac_channel,
+            dac_code & 0xFF, (dac_code >> 8) & 0xFF,
+            max_wait_ms & 0xFF, (max_wait_ms >> 8) & 0xFF,
+            meas_channel,
+        ]))
+        # Read 4 bytes (u32 little-endian) + TRN_END
+        data = self._read(4)
+        self._read(1)  # TRN_END
+        elapsed = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24)
+        return None if elapsed == 0xFFFFFFFF else elapsed
+
     # ── High-level operations ──
 
     def fc1_to_dac_codes(self, fc1_outputs: list[float], dac_scale: float = 1.16) -> list[int]:
@@ -235,80 +282,188 @@ class TarskiBoard:
         return cp
 
     def infer(self, pixels: np.ndarray, fc1_weights: np.ndarray,
-              dac_scale: float = 1.16, wait_ms: float = 25.0) -> tuple[int, int]:
-        """Run a single inference.
+              calib: dict = None, num_samples: int = 50,
+              interval_us: int = 500) -> tuple[int, list[int]]:
+        """Run a single inference using rapid spike sampling.
 
         Args:
             pixels: 6x6 normalized pixel array (36 floats)
             fc1_weights: [36, 9] fc1 weight matrix from checkpoint
-            dac_scale: DAC mapping scale factor
-            wait_ms: time to wait for neurons to compute
+            calib: calibration data (per-channel DAC scales). If None, uses default.
+            num_samples: number of spike sampling intervals (default 50)
+            interval_us: microseconds between samples (default 500 = 25ms total)
 
         Returns:
-            (prediction, spike_word) — predicted digit and raw 16-bit spike output
+            (prediction, spike_counts) — predicted digit and per-neuron spike counts
         """
         # fc1 weighted sum (laptop-side preprocessing)
         fc1_out = pixels.flatten() @ fc1_weights
 
-        # Convert to DAC codes and send
-        dac_codes = self.fc1_to_dac_codes(fc1_out.tolist(), dac_scale)
+        # Convert to DAC codes using calibration data
+        if calib and 'dac_scales' in calib:
+            dac_codes = self.fc1_to_dac_codes_calibrated(fc1_out.tolist(), calib['dac_scales'])
+        else:
+            dac_codes = self.fc1_to_dac_codes(fc1_out.tolist())
         self.load_dacs(dac_codes)
 
-        # Wait for analog neurons to compute
-        time.sleep(wait_ms / 1000.0)
+        # Small delay for DAC to settle
+        time.sleep(0.001)
 
-        # Read output spikes
-        spike_word = self.read_output()
+        # Run inference with rapid spike sampling
+        snapshots = self.run_inference(num_samples, interval_us)
 
-        # Prediction: argmax of spike bits
-        # Each bit represents whether output neuron i spiked
-        spike_counts = [(spike_word >> i) & 1 for i in range(10)]
+        # Count spikes per output neuron across all snapshots
+        spike_counts = [0] * 10
+        for word in snapshots:
+            for i in range(10):
+                if (word >> i) & 1:
+                    spike_counts[i] += 1
+
+        # Prediction: argmax of spike counts
         prediction = max(range(10), key=lambda i: spike_counts[i])
 
-        return prediction, spike_word
+        return prediction, spike_counts
 
-    def calibrate_l1(self, dac_voltages: list[float] = None,
-                     max_wait_ms: float = 50.0) -> dict:
-        """Run Layer 1 calibration: sweep DAC voltage per hidden neuron.
+    def fc1_to_dac_codes_calibrated(self, fc1_outputs: list[float],
+                                     dac_scales: list[float]) -> list[int]:
+        """Convert fc1 outputs to DAC codes using per-channel calibrated scales."""
+        codes = []
+        for i, g in enumerate(fc1_outputs):
+            scale = dac_scales[i] if i < len(dac_scales) else dac_scales[0]
+            v_dac = max(0.0, min(DAC_VREF, g * scale + V_BE))
+            code = int(round(v_dac / DAC_VREF * DAC_MAX_CODE))
+            codes.append(max(0, min(DAC_MAX_CODE, code)))
+        return codes
 
-        For each neuron, sets a DAC voltage and measures whether a spike occurs
-        within max_wait_ms using the MEAS_OUT pins.
+    def full_calibration(self, max_wait_ms: int = 50,
+                         dac_voltages: list[float] = None) -> dict:
+        """Run the full board calibration procedure.
 
-        Returns dict of {neuron_idx: [(dac_voltage, adc_reading), ...]}.
+        This discovers the board's actual behaviour using ONLY observations —
+        no assumed mappings. It:
+
+        1. Discovers which DAC channel drives which hidden neuron by setting
+           one channel at a time and observing which neuron spikes
+        2. Measures the spike time response curve per channel
+        3. Computes per-channel DAC scales for optimal weight mapping
+        4. Tests synapse current delivery by programming weights and observing
+           output spikes
+
+        Returns a calibration dict that can be saved to JSON and used for inference.
         """
         if dac_voltages is None:
-            dac_voltages = [v/10 for v in range(25, 6, -1)]  # 2.5V down to 0.7V
+            dac_voltages = [v * 0.1 for v in range(25, 6, -1)]  # 2.5V → 0.7V
 
-        # Enable measurement path
-        self.set_flag(0)  # FLAG_MEAS_ENABLE
+        calib = {
+            'dac_channel_map': {},   # channel_idx → neuron response data
+            'dac_scales': [],        # per-channel scale for fc1→DAC mapping
+            'spike_time_curves': {}, # channel_idx → [(v_dac, time_us), ...]
+            'synapse_test': {},      # output neuron test results
+        }
 
-        results = {}
-        for neuron_idx in range(9):
-            points = []
+        print("\n=== Phase 1: DAC Channel Discovery ===")
+        print("Setting each DAC channel to max and observing spike response.\n")
+
+        # For each DAC channel, set it to max and measure spike time.
+        # A channel that produces a spike controls a working hidden neuron.
+        for ch in range(9):
+            max_code = int(round(2.5 / DAC_VREF * DAC_MAX_CODE))
+            time_us = self.calib_l1_single(ch, max_code, max_wait_ms, meas_channel=0)
+
+            if time_us is not None:
+                print(f"  Channel {ch}: spike at {time_us}µs ({time_us/1000:.2f}ms)")
+                calib['dac_channel_map'][ch] = {'spike_time_us': time_us, 'active': True}
+            else:
+                print(f"  Channel {ch}: no spike (timeout {max_wait_ms}ms)")
+                calib['dac_channel_map'][ch] = {'spike_time_us': None, 'active': False}
+
+        active_channels = [ch for ch, d in calib['dac_channel_map'].items() if d['active']]
+        print(f"\n  Active channels: {active_channels} ({len(active_channels)}/9)")
+
+        print("\n=== Phase 2: Spike Time Response Curves ===")
+        print("Sweeping DAC voltage per active channel.\n")
+
+        for ch in active_channels:
+            curve = []
             for v_dac in dac_voltages:
-                # Set only this neuron's DAC, zero all others
-                codes = [0] * 9
-                codes[neuron_idx] = int(round(v_dac / V_DD * DAC_MAX_CODE))
-                self.load_dacs(codes)
+                code = int(round(v_dac / DAC_VREF * DAC_MAX_CODE))
+                time_us = self.calib_l1_single(ch, code, max_wait_ms, meas_channel=0)
+                curve.append((v_dac, time_us))
 
-                # Wait for spike
-                time.sleep(max_wait_ms / 1000.0)
+                status = f"{time_us}µs" if time_us is not None else "no spike"
+                print(f"  Ch{ch} V_DAC={v_dac:.2f}V → {status}")
 
-                # Read measurement (L1 channel)
-                adc = self.read_measurement(0)
-                points.append((v_dac, adc))
+            calib['spike_time_curves'][ch] = curve
 
-                # Zero the DAC to reset neuron
-                codes[neuron_idx] = 0
-                self.load_dacs(codes)
-                time.sleep(5.0 / 1000.0)  # Brief reset
+            # Compute per-channel scale from the curve
+            # Find the voltage where spike time ≈ 1ms (matching the simulation timestep)
+            # The optimal scale maps gilgamesh threshold=1.0 to this voltage
+            target_time_us = 1000  # 1ms
+            scale = self._compute_channel_scale(curve, target_time_us)
+            calib['dac_scales'].append(scale)
+            print(f"  Ch{ch} calibrated scale: {scale:.4f}\n")
 
-            results[neuron_idx] = points
-            print(f"  H{neuron_idx}: {len(points)} measurements")
+        # Fill remaining scales with average for inactive channels
+        if calib['dac_scales']:
+            avg_scale = sum(calib['dac_scales']) / len(calib['dac_scales'])
+        else:
+            avg_scale = THETA_0 * R_SET_INPUT / R_LEAK  # nominal
+        while len(calib['dac_scales']) < 9:
+            calib['dac_scales'].append(avg_scale)
 
-        # Disable measurement path
-        self.unset_flag(0)
-        return results
+        print("\n=== Phase 3: Synapse Verification ===")
+        print("Programming weights and verifying output neuron response.\n")
+
+        # Load a test pattern: all synapses excitatory max (weight = +7)
+        test_weights = [self.weight_to_sr_byte(7)] * 90
+        self.load_weights(test_weights)
+
+        # Drive all hidden neurons and sample output
+        max_codes = [int(round(2.0 / DAC_VREF * DAC_MAX_CODE))] * 9
+        self.load_dacs(max_codes)
+        time.sleep(0.001)
+
+        snapshots = self.run_inference(50, 500)  # 50 samples × 500µs = 25ms
+        spike_counts = [0] * 10
+        for word in snapshots:
+            for i in range(10):
+                if (word >> i) & 1:
+                    spike_counts[i] += 1
+
+        print(f"  All-excitatory test: spike counts = {spike_counts}")
+        calib['synapse_test']['all_exc_counts'] = spike_counts
+
+        responding = sum(1 for c in spike_counts if c > 0)
+        print(f"  {responding}/10 output neurons responding")
+
+        return calib
+
+    def _compute_channel_scale(self, curve: list[tuple], target_time_us: int) -> float:
+        """Compute the DAC scale factor from a calibration curve.
+
+        Finds the V_DAC that produces a spike at approximately target_time_us,
+        then computes what scale maps gilgamesh threshold=1.0 to that voltage.
+        """
+        # Find two points bracketing the target time
+        for i in range(len(curve) - 1):
+            v1, t1 = curve[i]
+            v2, t2 = curve[i + 1]
+            if t1 is not None and t2 is not None:
+                if t1 <= target_time_us <= t2 or t2 <= target_time_us <= t1:
+                    # Linear interpolation
+                    frac = (target_time_us - t1) / (t2 - t1) if t2 != t1 else 0.5
+                    v_target = v1 + frac * (v2 - v1)
+                    # scale = (v_target - V_BE) / (1.0)
+                    # Because gilgamesh threshold=1.0 should map to this voltage
+                    return max(0.01, v_target - V_BE)
+
+        # Fallback: use the fastest spiking point
+        for v, t in curve:
+            if t is not None:
+                return max(0.01, v - V_BE)
+
+        # No spikes at all: use nominal
+        return THETA_0 * R_SET_INPUT / R_LEAK
 
 
 def main():
@@ -357,14 +512,25 @@ def main():
                     print(f"  DAC at 0x{addr:02X}: NOT RESPONDING")
 
         if args.calibrate:
-            print("\nRunning L1 calibration...")
-            results = board.calibrate_l1()
+            print("\nRunning full board calibration...")
+            calib = board.full_calibration()
             with open('calibration_results.json', 'w') as f:
-                json.dump(results, f, indent=2)
-            print("Saved to calibration_results.json")
+                json.dump(calib, f, indent=2, default=str)
+            print("\nCalibration saved to calibration_results.json")
+            print(f"Per-channel DAC scales: {[f'{s:.4f}' for s in calib['dac_scales']]}")
 
         if args.infer and args.checkpoint:
-            print(f"\nLoading checkpoint: {args.checkpoint}")
+            # Load calibration if available
+            calib = None
+            try:
+                with open('calibration_results.json') as f:
+                    calib = json.load(f)
+                print(f"\nLoaded calibration from calibration_results.json")
+            except FileNotFoundError:
+                print("\nNo calibration file found — using default DAC mapping.")
+                print("Run --calibrate first for best accuracy.")
+
+            print(f"Loading checkpoint: {args.checkpoint}")
             cp = board.load_checkpoint(args.checkpoint, args.dac_scale)
 
             # Load fc1 weights
@@ -394,15 +560,17 @@ def main():
                 # MNIST normalization
                 pixels_norm = (pixels_6x6 / 255.0 - 0.1307) / 0.3081
 
-                prediction, spike_word = board.infer(
-                    pixels_norm, fc1_w, args.dac_scale
+                prediction, spike_counts = board.infer(
+                    pixels_norm, fc1_w, calib,
+                    num_samples=50, interval_us=500,  # 50×500µs = 25ms
                 )
                 label = labels[i]
                 ok = '✓' if prediction == label else '✗'
                 if prediction == label:
                     correct += 1
-                print(f"  Sample {i:>4}: label={label}, pred={prediction}, "
-                      f"spikes=0x{spike_word:04X} {ok}")
+                top3 = sorted(range(10), key=lambda j: spike_counts[j], reverse=True)[:3]
+                top3_str = ' '.join(f'{j}:{spike_counts[j]}' for j in top3)
+                print(f"  #{i:>4}: label={label} pred={prediction} {ok}  [{top3_str}]")
 
             print(f"\nAccuracy: {correct}/{args.samples} "
                   f"({correct/args.samples*100:.1f}%)")

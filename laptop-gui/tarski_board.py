@@ -676,10 +676,17 @@ def main():
             correct = 0
             for i in range(min(args.samples, len(images))):
                 img = images[i].astype(np.float32)
-                # Downsample 28x28 → 6x6 by averaging blocks
-                h_blocks = np.array_split(img, 6, axis=0)
-                small = np.array([np.array_split(hb, 6, axis=1) for hb in h_blocks])
-                pixels_6x6 = np.array([[block.mean() for block in row] for row in small])
+                # Downsample 28x28 → 6x6 by float-scaled block averaging
+                # (matches Rust MnistData::load exactly)
+                scale = 28.0 / 6.0
+                pixels_6x6 = np.zeros((6, 6), dtype=np.float32)
+                for ty in range(6):
+                    for tx in range(6):
+                        y0 = int(ty * scale)
+                        y1 = min(int((ty + 1) * scale), 28)
+                        x0 = int(tx * scale)
+                        x1 = min(int((tx + 1) * scale), 28)
+                        pixels_6x6[ty, tx] = img[y0:y1, x0:x1].mean()
                 # MNIST normalization
                 pixels_norm = (pixels_6x6 / 255.0 - 0.1307) / 0.3081
 

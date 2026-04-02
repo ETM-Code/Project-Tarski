@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useDrawingCanvas } from './hooks/useDrawingCanvas';
 import { ConnectionStatus } from './components/ConnectionStatus';
@@ -26,6 +26,7 @@ function App() {
     paintHiRes,
     paintLoRes,
     setFromExternal,
+    setFromExternal28,
   } = useDrawingCanvas();
 
   const [inputSource, setInputSource] = useState<InputSource>('draw');
@@ -38,11 +39,39 @@ function App() {
     [],
   );
 
+  // Update canvas when a new MNIST sample is loaded (keyed on sample_index)
+  const lastLoadedIndex = useRef<number | null>(null);
+  useEffect(() => {
+    const idx = status?.sample_index ?? null;
+    if (
+      idx !== null &&
+      idx !== lastLoadedIndex.current &&
+      status?.sample_pixels &&
+      status.sample_pixels.length === 36
+    ) {
+      lastLoadedIndex.current = idx;
+      // Server pixels are MNIST-normalized: (pixel/255 - 0.1307) / 0.3081
+      // Convert back to [0, 1] for canvas display
+      const displayPixels = status.sample_pixels.map((p) => {
+        const raw = p * 0.3081 + 0.1307;
+        return Math.max(0, Math.min(1, raw));
+      });
+
+      if (status.sample_pixels_28x28 && status.sample_pixels_28x28.length === 784) {
+        // Use real 28x28 MNIST data for hi-res view
+        setFromExternal28(displayPixels, status.sample_pixels_28x28);
+        setIsHiRes(true);
+      } else {
+        setFromExternal(displayPixels);
+      }
+    }
+  }, [status?.sample_index, status?.sample_pixels, status?.sample_pixels_28x28, setFromExternal, setFromExternal28, setIsHiRes]);
+
   // Send drawn image to board
   const sendToBoard = useCallback(() => {
-    // Normalize pixels to the range expected by the board
-    // The board expects 36 floats, typically in [-1, 1] or [0, 1]
-    const normalized = pixels.map((v) => v * 2 - 1); // Map [0,1] -> [-1,1]
+    // Apply MNIST normalization: (pixel - 0.1307) / 0.3081
+    // Canvas pixels are in [0, 1] (same as pixel/255), matching the MNIST pipeline
+    const normalized = pixels.map((v) => (v - 0.1307) / 0.3081);
     send({ type: 'InferCustom', pixels: normalized });
   }, [pixels, send]);
 

@@ -68,6 +68,8 @@ export interface SimStatus {
   true_label: number | null;
   prediction: number | null;
   correct: boolean | null;
+  sample_pixels?: number[];
+  sample_pixels_28x28?: number[];
 }
 
 export interface ProbeData {

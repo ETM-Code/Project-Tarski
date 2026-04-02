@@ -78,7 +78,7 @@ export function useDrawingCanvas() {
     });
   }, []);
 
-  /** Set pixels from an external source (e.g., MNIST sample). */
+  /** Set pixels from an external 6x6 source. */
   const setFromExternal = useCallback((p: number[]) => {
     setPixels(p.slice(0, 36));
     // Also update hi-res to match (upscale for display consistency)
@@ -100,6 +100,12 @@ export function useDrawingCanvas() {
     hiResRef.current = grid;
   }, []);
 
+  /** Set pixels from an external 28x28 source (real MNIST hi-res) + matching 6x6. */
+  const setFromExternal28 = useCallback((p6x6: number[], p28x28: number[]) => {
+    setPixels(p6x6.slice(0, 36));
+    hiResRef.current = p28x28.slice(0, 784);
+  }, []);
+
   return {
     pixels,
     isHiRes,
@@ -110,5 +116,6 @@ export function useDrawingCanvas() {
     paintHiRes,
     paintLoRes,
     setFromExternal,
+    setFromExternal28,
   };
 }

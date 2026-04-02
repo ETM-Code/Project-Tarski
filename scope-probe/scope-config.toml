@@ -1,0 +1,3 @@
+# Keysight DSO-X 2012A acquisition defaults
+# Auto-written by scope-capture.py --set-* options
+resource = "USB0::2391::6041::MY51360956::0::INSTR"

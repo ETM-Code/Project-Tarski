@@ -1,4 +1,8 @@
 #include <Arduino.h>
+#include <avr/sleep.h>
+#include <avr/interrupt.h>
+#include <avr/power.h>
+#include <avr/wdt.h>
 #include <Wire.h>
 #include "device.hpp"
 #include "signals.hpp"
@@ -11,12 +15,14 @@ namespace Device
 {
     static constexpr usize _DACS_PER_MCP4728 = 4;
     static constexpr u8 _FLAG_MEAS_ENABLE = 0;
+    static constexpr u8 _FLAG_ADC_ENABLE = 1;
     static constexpr u8 _MEAS_SOURCE_L1 = 0;
     static constexpr u8 _MEAS_SOURCE_L2 = 1;
 
-    static time_t _timeout_ms;
+    static volatile bool _wdt_elapsed = false;
+    static u8 _wdt_setting = 0;
+
     static u8 _response;
-    static bool _command_impl_approved = false;
     
     static u8 _weight_data[CONF_SYNAPSE_COUNT];
     static View<u8> _weights = { CONF_SYNAPSE_COUNT, _weight_data };
@@ -27,6 +33,55 @@ namespace Device
 
     static u16 _dac_data[CONF_DAC_COUNT];
     static View<u16> _dacs = { CONF_DAC_COUNT, _dac_data };
+
+    ISR(WDT_vect) { _wdt_elapsed = true; }
+
+    static u8 _WDTFromTimeout(Timeout timeout)
+    {
+        switch(timeout)
+        {
+            case Timeout::TO16MS:   return 0;
+            case Timeout::TO32MS:   return _BV(WDP0);
+            case Timeout::TO64MS:   return _BV(WDP1);
+            case Timeout::TO125MS:  return _BV(WDP1) | _BV(WDP0);
+            case Timeout::TO250MS:  return _BV(WDP2);
+            case Timeout::TO500MS:  return _BV(WDP2) | _BV(WDP0);
+            case Timeout::TO1S:     return _BV(WDP2) | _BV(WDP1);
+            case Timeout::TO2S:     return _BV(WDP2) | _BV(WDP1) | _BV(WDP0);
+            case Timeout::TO4S:     return _BV(WDP3);
+            case Timeout::TO8S:     return _BV(WDP3) | _BV(WDP0);
+            default:                return _BV(WDP2) | _BV(WDP1);
+        }
+    }
+
+    static void _WDTStart(void)
+    {
+        _wdt_elapsed = false;
+        MCUSR &= ~_BV(WDRF);
+
+        cli();
+        wdt_reset();
+        WDTCSR = _BV(WDCE) | _BV(WDE);
+        WDTCSR = _BV(WDIE) | _wdt_setting;
+        sei();
+    }
+
+    static void _WDTStop(void)
+    {
+        cli();
+        wdt_disable();
+        sei();
+    }
+
+    static void _EnableADC(void)
+    {
+        ADCSRA |= _BV(ADEN);
+    }
+
+    static void _DisableADC(void)
+    {
+        ADCSRA &= ~_BV(ADEN);
+    }
 
     static void _SendFailure(void)
     {
@@ -114,6 +169,13 @@ namespace Device
                 digitalWrite(PIN_L2_EN_MEAS, level);
                 return true;
 
+            case _FLAG_ADC_ENABLE:
+                if(enabled)
+                    _EnableADC();
+                else
+                    _DisableADC();
+                return true;
+
             default:
                 return false;
         }
@@ -137,7 +199,7 @@ namespace Device
     }
 }
 
-void Device::Init(time_t timeout_ms)
+void Device::Init(Timeout timeout)
 {
     // Initialise GPIO used for serial-style peripheral control.
     pinMode(PIN_LATCH_DAC, OUTPUT);
@@ -177,8 +239,35 @@ void Device::Init(time_t timeout_ms)
     Wire.begin();
 
     // Set up the timeout value to the provided one
-    _timeout_ms = timeout_ms;
+    _wdt_setting = _WDTFromTimeout(timeout);
+
+    // Disable peripherals that are never used by this firmware.
+    power_spi_disable();
+    power_timer1_disable();
+    power_timer2_disable();
+    ACSR |= _BV(ACD); // Disable analog comparator
+    TIMSK0 &= ~_BV(TOIE0); // Disable Timer0 overflow interrupt
+
+    // Disable ADC to reduce power consumption
+    _DisableADC();
+
+    // Enable interrupts
+    sei();
 }
+
+void Device::Idle(void)
+{
+    if(!Serial.available())
+    {
+        set_sleep_mode(SLEEP_MODE_IDLE);
+        cli();
+        sleep_enable();
+        sei();
+        sleep_cpu();            // Device sleeps here until an interrupt arrives
+        sleep_disable();
+    }
+}
+
 
 void Device::SendSignature(void)
 {
@@ -205,36 +294,52 @@ void Device::SendUnknownCommand(void)
 
 bool Device::AwaitData(void)
 {
-    // Setup timer and end time
-    time_t current_time = millis();
-    time_t timeout_time = current_time + _timeout_ms;
+    if(Serial.available()) return true;
 
-    // Loop until communication achieved or timeout
-    while(current_time < timeout_time)
+    // Start timeout timer
+    _WDTStart();
+
+    // Keep sleeping until timer expires or we recieve data
+    while(!Serial.available() && !_wdt_elapsed)
     {
-        if(Serial.available()) return true;
-        current_time = millis();
+        set_sleep_mode(SLEEP_MODE_IDLE);
+        cli();
+        sleep_enable();
+        sei();
+        sleep_cpu();
+        sleep_disable();
     }
 
-    // If we timed-out return false
-    return false;
+    _WDTStop();
+
+    return Serial.available();
 }
 
 bool Device::AwaitResponse(void)
 {
-    // Setup timer and end time
-    time_t current_time = millis();
-    time_t timeout_time = current_time + _timeout_ms;
-
     // Set response to known value
     _response = 0x00;
-
-    // Loop until communication achieved or timeout
-    while(current_time < timeout_time)
+    
+    if(!Serial.available())
     {
-        if(Serial.available()){ _response = Serial.read(); break; }
-        current_time = millis();
-    }
+        // Start timeout timer
+        _WDTStart();
+    
+        // Keep sleeping until timer expires or we recieve data
+        while(!Serial.available() && !_wdt_elapsed)
+        {
+            set_sleep_mode(SLEEP_MODE_IDLE);
+            cli();
+            sleep_enable();
+            sei();
+            sleep_cpu();
+            sleep_disable();
+        }
+    
+        _WDTStop();
+    }    
+
+    if(Serial.available()) _response = Serial.read();
 
     // Return false if we had no response
     if(!_response) return false;
@@ -361,12 +466,14 @@ void Device::ReadMeasurement(void)
     {
         digitalWrite(PIN_L1_EN_MEAS, HIGH);
         digitalWrite(PIN_L2_EN_MEAS, LOW);
+        analogRead(PIN_L1_MEAS_OUT);            // Dummy read to settle ADC
         _L1_meas = static_cast<u16>(analogRead(PIN_L1_MEAS_OUT));
     }
     else if(measurement_source == _MEAS_SOURCE_L2)
     {
         digitalWrite(PIN_L1_EN_MEAS, LOW);
         digitalWrite(PIN_L2_EN_MEAS, HIGH);
+        analogRead(PIN_L2_MEAS_OUT);            // Dummy read to settle ADC
         _L2_meas = static_cast<u16>(analogRead(PIN_L2_MEAS_OUT));
     }
     else

@@ -5,7 +5,6 @@
  * These are 1 byte ASCII (control & printable) characters used to interact with the Arduino.
 **/
 
-#define PORT_TIMEOUT    -1              // Used when communication on the port times out
 #define PORT_MSG        0x02            // Used when the device wants to send a printable message
 #define PORT_MSG_END    0x03            // Used when the device wants to stop sending a printable message
 #define PORT_TRN_END    0x04            // Used to signal end of transmission

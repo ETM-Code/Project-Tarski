@@ -8,11 +8,31 @@
 
 namespace Device
 {
+    enum class Timeout : u8         // Possible timeouts for serial communication
+    {
+        TO16MS,
+        TO32MS,
+        TO64MS,
+        TO125MS,
+        TO250MS,
+        TO500MS,
+        TO1S,
+        TO2S,
+        TO4S,
+        TO8S
+    };
+
     /**
      * Initialise module state used by the serial command interface.
-     * @param timeout_ms Timeout (in milliseconds) used by blocking wait helpers.
+     * @param timeout Timeout preset used by blocking wait helpers.
      */
-    void Init(time_t timeout_ms);
+    void Init(Timeout timeout);
+
+    /**
+     * Puts the device into sleep mode to reduce power consumption.
+     * The device wakes up and the function returns when data is available on the serial bus.
+     */
+    void Idle(void);
 
     /**
      * Send the device firmware signature over serial.
@@ -79,6 +99,7 @@ namespace Device
 
     /**
      * Read either the L1 or L2 voltage output and transmit it over serial.
+     * NOTE: The user must first ensure that the ADCs are enabled before reading.
      */
     void ReadMeasurement(void);
 

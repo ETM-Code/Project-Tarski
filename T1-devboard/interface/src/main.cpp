@@ -5,16 +5,16 @@
 void setup()
 {
     // Initialise the device
-    Device::Init(1000);
+    Device::Init(Device::Timeout::TO1S);
 
     // Begin serial communication
-    Serial.begin(9600);
+    Serial.begin(115200);
 }
 
 void loop()
 {
-    // Wait until at least one command byte is available.
-    while(!Serial.available()) continue;
+    // Wait until data is available on the serial bus.
+    while(!Serial.available()) Device::Idle();
 
     // Read the command identifier sent by the host.
     char command_type = Serial.read();

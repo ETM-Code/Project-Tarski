@@ -10,7 +10,7 @@ The firmware:
 ## Runtime Overview
 
 Main control flow is in `src/main.cpp`:
-1. `setup()` calls `Device::Init(1000)` and `Serial.begin(9600)`.
+1. `setup()` calls `Device::Init(Device::Timeout::TO1S)` and `Serial.begin(9600)`.
 2. `loop()` blocks until one serial byte is available.
 3. That byte is treated as a command and dispatched to a `Device::*` handler.
 4. Unknown commands return `NAK` and end-of-transmission.
@@ -18,7 +18,7 @@ Main control flow is in `src/main.cpp`:
 ## Serial Link
 
 Current serial settings:
-- Baud: `9600`
+- Baud: `115200`
 - Data bits: `8`
 - Parity: `None`
 - Stop bits: `1`
@@ -57,9 +57,21 @@ Some commands immediately send `ACK` before reading payload. This is a handshake
 
 ### Timeout behavior
 
-`Device::Init(1000)` sets a 1000 ms timeout used by `AwaitData()`/`ReadU8()`.
+Serial read timeouts are configured with `Device::Init(Device::Timeout::<preset>)`.
 
-Important detail: timeout is per byte read. If the next expected byte is not received within ~1000 ms, the command fails (`NAK`, `TRN_END`).
+Supported timeout presets are:
+- `TO16MS`
+- `TO32MS`
+- `TO64MS`
+- `TO125MS`
+- `TO250MS`
+- `TO500MS`
+- `TO1S`
+- `TO2S`
+- `TO4S`
+- `TO8S`
+
+Timeout waiting uses the AVR watchdog interrupt plus `SLEEP_MODE_IDLE` (no `millis()` polling loop). Timeout is still per expected byte read: if the next expected byte is not received before the selected preset expires, the command fails (`NAK`, `TRN_END`).
 
 ## Command-by-Command Spec
 
@@ -152,6 +164,10 @@ Device behavior:
 - reads analog input (`PIN_L1_MEAS_OUT` or `PIN_L2_MEAS_OUT`),
 - disables both measurement enable pins afterward.
 
+Important:
+- ADC must be enabled before taking a measurement (set flag `1` using `PORT_SET_FLAG`).
+- If ADC is disabled, measurement reads may be invalid.
+
 Final response:
 - success: 2-byte measurement (`u16`, little-endian) + `TRN_END`
 - failure (bad source or timeout): `NAK` + `TRN_END`
@@ -162,6 +178,7 @@ Common payload:
 
 Current implemented flag IDs:
 - `0` => measurement enable signal (`PIN_L1_EN_MEAS` and `PIN_L2_EN_MEAS` together)
+- `1` => ADC enable/disable
 
 Behavior:
 - `'F'` (`PORT_SET_FLAG`): set signal high
@@ -237,4 +254,4 @@ If DAC addresses are changed by your external tooling, update `CONF_MCP4728_ADDR
 
 - LED-related command/circuit code has been removed.
 - `Device::AwaitResponse()` exists but is not currently used by command handlers.
-- There is an internal variable `_command_impl_approved` currently not used by command handlers.
+- Timer0 overflow interrupt is disabled in init, because timeout logic is watchdog-based.

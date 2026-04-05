@@ -1,0 +1,52 @@
+{
+  "model_name": "StandardANN_Int4",
+  "bits": 4,
+  "network": {
+    "input_size": 36,
+    "hidden_size": 12,
+    "output_size": 10
+  },
+  "neuron": {
+    "beta": 0.9,
+    "threshold": 1.0
+  },
+  "training": {
+    "num_steps": 25
+  },
+  "layers": {
+    "fc1_weight": {
+      "shape": [
+        12,
+        36
+      ],
+      "scale": 0.2655247151851654,
+      "zero_point": 0,
+      "bits": 4
+    },
+    "fc1_bias": {
+      "shape": [
+        12
+      ],
+      "scale": 0.06931477785110474,
+      "zero_point": 0,
+      "bits": 4
+    },
+    "fc2_weight": {
+      "shape": [
+        10,
+        12
+      ],
+      "scale": 0.19233772158622742,
+      "zero_point": 0,
+      "bits": 4
+    },
+    "fc2_bias": {
+      "shape": [
+        10
+      ],
+      "scale": 0.0850529745221138,
+      "zero_point": 0,
+      "bits": 4
+    }
+  }
+}

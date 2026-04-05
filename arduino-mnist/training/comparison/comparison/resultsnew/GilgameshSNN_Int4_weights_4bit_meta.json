@@ -1,0 +1,52 @@
+{
+  "model_name": "GilgameshSNN_Int4",
+  "bits": 4,
+  "network": {
+    "input_size": 36,
+    "hidden_size": 12,
+    "output_size": 10
+  },
+  "neuron": {
+    "beta": 0.9,
+    "threshold": 1.0
+  },
+  "training": {
+    "num_steps": 25
+  },
+  "layers": {
+    "fc1_weight": {
+      "shape": [
+        12,
+        36
+      ],
+      "scale": 0.10572665929794312,
+      "zero_point": 0,
+      "bits": 4
+    },
+    "fc1_bias": {
+      "shape": [
+        12
+      ],
+      "scale": 0.03138832747936249,
+      "zero_point": 0,
+      "bits": 4
+    },
+    "fc2_weight": {
+      "shape": [
+        10,
+        12
+      ],
+      "scale": 0.18720538914203644,
+      "zero_point": 0,
+      "bits": 4
+    },
+    "fc2_bias": {
+      "shape": [
+        10
+      ],
+      "scale": 0.06781747192144394,
+      "zero_point": 0,
+      "bits": 4
+    }
+  }
+}

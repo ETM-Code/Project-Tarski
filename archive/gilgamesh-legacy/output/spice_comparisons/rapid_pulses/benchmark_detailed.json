@@ -1,0 +1,23 @@
+{
+  "rust": {
+    "max_s": 0.5453024171292782,
+    "mean_ms_per_sample": 0.01217872511734848,
+    "mean_s": 0.5453024171292782,
+    "median_s": 0.5453024171292782,
+    "min_s": 0.5453024171292782,
+    "runs": 1.0,
+    "sample_count": 44775.0,
+    "samples_per_second": 82110.40074921383,
+    "total_s": 0.5453024171292782
+  },
+  "rust_timings": {
+    "rust_analysis_ns": 1172416,
+    "rust_preprocess_ns": 792,
+    "rust_serialization_ns": 44874375,
+    "rust_simulate_ns": 2857250,
+    "spice_parse_ns": 34322375,
+    "spice_post_ns": null,
+    "spice_preprocess_ns": null,
+    "spice_simulate_ns": null
+  }
+}

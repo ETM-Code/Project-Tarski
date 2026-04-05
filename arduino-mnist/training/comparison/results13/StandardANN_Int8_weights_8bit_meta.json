@@ -1,0 +1,52 @@
+{
+  "model_name": "StandardANN_Int8",
+  "bits": 8,
+  "network": {
+    "input_size": 36,
+    "hidden_size": 13,
+    "output_size": 10
+  },
+  "neuron": {
+    "beta": 0.9,
+    "threshold": 1.0
+  },
+  "training": {
+    "num_steps": 25
+  },
+  "layers": {
+    "fc1_weight": {
+      "shape": [
+        13,
+        36
+      ],
+      "scale": 0.011403760872781277,
+      "zero_point": 0,
+      "bits": 8
+    },
+    "fc1_bias": {
+      "shape": [
+        13
+      ],
+      "scale": 0.003893923945724964,
+      "zero_point": 0,
+      "bits": 8
+    },
+    "fc2_weight": {
+      "shape": [
+        10,
+        13
+      ],
+      "scale": 0.012517771683633327,
+      "zero_point": 0,
+      "bits": 8
+    },
+    "fc2_bias": {
+      "shape": [
+        10
+      ],
+      "scale": 0.004081461578607559,
+      "zero_point": 0,
+      "bits": 8
+    }
+  }
+}

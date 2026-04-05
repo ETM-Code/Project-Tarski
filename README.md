@@ -8,6 +8,7 @@ This repository has accumulated a lot of parallel experiments over time. The goa
 
 - [`emulator/README.md`](emulator/README.md): hardware-accurate board emulator and web UI
 - [`gilgamesh/README.md`](gilgamesh/README.md): current Rust SNN training and hardware-matched model work
+- [`arduino-mnist/README.md`](arduino-mnist/README.md): Arduino inference project and associated training assets
 - [`scope-probe/README.md`](scope-probe/README.md): oscilloscope capture and power analysis tooling
 - [`report/README.md`](report/README.md): final report sources and figure/material organisation
 - [`docs/README.md`](docs/README.md): repository-level notes and top-level project documents
@@ -34,12 +35,12 @@ This repository has accumulated a lot of parallel experiments over time. The goa
 
 ### Supporting or historical areas
 
-- `gilgamesh_legacy/`: older generation of the training/simulation stack retained for reference
+- `archive/gilgamesh-legacy/`: older generation of the training/simulation stack retained for reference
 - `SPICE/`: SPICE experiments and neuron-level validation work
 - `assets/`: presentations, exported documents, images, and assorted project collateral
 - `references/`: datasheets, primer material, vendored libraries, and shared standalone assets
 - `archive/`: exploratory or superseded side projects kept for historical context
-- `archive/arduino-mnist/`: earlier embedded experiment
+- `arduino-mnist/`: embedded Arduino inference project and training artifacts
 - `laptop-gui/`: separate GUI prototype work
 
 ## Working Conventions

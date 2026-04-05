@@ -1,0 +1,79 @@
+{
+  "version": "0.2",
+  "globals": {
+    "alpha_out": 1.0,
+    "delta": 5.0e-4,
+    "pulse_stretch_duration_s": 0.002
+  },
+  "neuron_templates": {
+    "default": {
+      "Cm": 3.3e-8,
+      "Rleak": 120000.0,
+      "theta": {
+        "mode": "constant",
+        "theta0": 0.01
+      },
+      "reset": {
+        "Rreset": 750.0,
+        "Ron_switch": 30.0
+      }
+    },
+    "output_analog": {
+      "Cm": 3.3e-8,
+      "Rleak": 120000.0,
+      "theta": {
+        "mode": "constant",
+        "theta0": 1000.0
+      },
+      "reset": {
+        "Rreset": 750.0,
+        "Ron_switch": 30.0
+      }
+    }
+  },
+  "layers": [
+    { "id": "input", "type": "input", "size": 7, "neuron": "output_analog" },
+    { "id": "hidden", "type": "hidden", "size": 30, "neuron": "default" },
+    { "id": "output", "type": "readout", "size": 10, "neuron": "output_analog" }
+  ],
+  "connect": [
+    {
+      "from": "input",
+      "to": "hidden",
+      "rule": { "rule": "dense" },
+      "synapse": { "type": "excitatory", "R": 15000.0 }
+    },
+    {
+      "from": "hidden",
+      "to": "output",
+      "rule": { "rule": "dense" },
+      "synapse": { "type": "excitatory", "R": 22000.0 }
+    }
+  ],
+  "readouts": [
+    {
+      "id": "logits",
+      "type": "analog",
+      "source_layer": "output",
+      "signal": "analog_background",
+      "tau_s": 0.002
+    }
+  ],
+  "training": {
+    "dataset": "../src/inputs/training_set/converted/train_7x7.bin",
+    "test_dataset": "../src/inputs/testing_set/converted/test_7x7.bin",
+    "input_layer": "input",
+    "target_readout": "logits",
+    "checkpoint_dir": "../output/checkpoints_training",
+    "checkpoint_every": 10,
+    "config": {
+      "learning_rate": 0.01,
+      "epochs": 50,
+      "row_spacing_start": 0.0015,
+      "row_spacing_end": 0.0008,
+      "pulse_width": 0.45,
+      "input_scale": 5.0,
+      "sample_limit": 1000
+    }
+  }
+}

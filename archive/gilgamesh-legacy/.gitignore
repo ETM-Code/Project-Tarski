@@ -1,0 +1,7 @@
+.vscode
+**/.DS_Store
+target/
+comparison_output*
+output/checkpoint*
+comparison_runs/
+*.pyc

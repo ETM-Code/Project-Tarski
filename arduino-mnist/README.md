@@ -1,30 +1,26 @@
 # Arduino MNIST
 
-Embedded inference project for Arduino-compatible targets, including:
+Arduino-compatible inference and board-interface project used as the digital baseline and integration path in Project Tarski.
+
+## Contents
 
 - firmware/runtime code under `src/` and `include/`
 - host-side serial/testing tooling under `software/`
 - exported model artifacts under `model/`
-- Python comparison and quantized training assets under `training/comparison/`
+- training/comparison Python assets under `training/comparison/`
 
 ## Quick Start
 
 From repository root:
 
 ```bash
-# Build and flash with PlatformIO (if configured for your board)
 cd arduino-mnist
 platformio run
 
-# Run host-side tooling
 cd software
 make
 ```
 
-## Training / Comparison Workflow
+## Training and Comparison
 
-The Python workflow previously under `gilgamesh/comparison/` now lives in:
-
-- `arduino-mnist/training/comparison/`
-
-See `arduino-mnist/training/README.md` for usage notes.
+The Python training/comparison workflow lives in `arduino-mnist/training/comparison/`. See `training/README.md` for commands and environment guidance.

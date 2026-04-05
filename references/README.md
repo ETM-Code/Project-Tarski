@@ -1,6 +1,6 @@
 # References
 
-This directory contains stable reference material and shared standalone assets that support the main project but are not active source trees.
+Stable reference material used across the project.
 
 ## Contents
 
@@ -10,4 +10,4 @@ This directory contains stable reference material and shared standalone assets t
 - `board-demo-components.docx`: standalone component list document
 - `circuitshot.png`: exported schematic image used by report tooling
 
-Keep active project code out of this directory. This is for reusable reference material, not ongoing implementation work.
+Keep active implementation code out of this directory.

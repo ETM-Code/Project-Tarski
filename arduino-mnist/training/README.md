@@ -1,12 +1,12 @@
 # Training Assets
 
-This directory contains Python-side training/comparison assets used for Arduino-compatible network experiments.
+Python-side training and comparison assets for Arduino-compatible network experiments.
 
 ## Layout
 
 - `comparison/`: snnTorch/PyTorch comparison scripts, dependency list, and historical result snapshots.
 
-## Run Comparison
+## Run
 
 From repository root:
 
@@ -14,7 +14,7 @@ From repository root:
 ./arduino-mnist/training/comparison/run_comparison.sh
 ```
 
-Or run directly:
+Or run the script directly:
 
 ```bash
 python3.11 arduino-mnist/training/comparison/snntorch_comparison.py --models baseline ann

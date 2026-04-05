@@ -10,15 +10,16 @@ This repository has accumulated a lot of parallel experiments over time. The goa
 - [`gilgamesh/README.md`](gilgamesh/README.md): current Rust SNN training and hardware-matched model work
 - [`scope-probe/README.md`](scope-probe/README.md): oscilloscope capture and power analysis tooling
 - [`report/README.md`](report/README.md): final report sources and figure/material organisation
+- [`docs/README.md`](docs/README.md): repository-level notes and top-level project documents
 - [`General Files/README.md`](General%20Files/README.md): legacy project assets and supporting documents
 
 ## Repository Map
 
 ### Top-level docs
 
-- `URGENT_CIRCUIT_SURGERY.md`: hardware fixes discovered during validation
-- `COST_ESTIMATE.md`: project cost planning
-- `mnist-training-system-plan.md`: longer-form training system planning notes
+- `docs/urgent-circuit-surgery.md`: hardware fixes discovered during validation
+- `docs/cost-estimate.md`: project cost planning
+- `docs/mnist-training-system-plan.md`: longer-form training system planning notes
 
 ### Active project areas
 

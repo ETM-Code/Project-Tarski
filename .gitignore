@@ -1,11 +1,7 @@
 .vscode/
 **/.DS_Store
 
-# Local agent/tooling state
-.assistant/
-.assistant_docs/
-**/.assistant/
-**/.desloppify/
+# Local workspace state
 voice/
 
 # Python

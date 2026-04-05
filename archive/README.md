@@ -1,0 +1,10 @@
+# Archive
+
+This directory contains exploratory or superseded side projects that are being kept for historical context.
+
+## Contents
+
+- `circuit-layout/`: stripboard-era layout experiments
+- `snn-comparison/`: older comparison/training experiment workspace
+
+Archived material should remain readable, but new work should generally not start here unless it is explicitly reviving one of these tracks.

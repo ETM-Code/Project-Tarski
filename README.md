@@ -11,6 +11,8 @@ This repository has accumulated a lot of parallel experiments over time. The goa
 - [`scope-probe/README.md`](scope-probe/README.md): oscilloscope capture and power analysis tooling
 - [`report/README.md`](report/README.md): final report sources and figure/material organisation
 - [`docs/README.md`](docs/README.md): repository-level notes and top-level project documents
+- [`references/README.md`](references/README.md): datasheets, primer material, vendored references, and shared assets
+- [`archive/README.md`](archive/README.md): archived experiments and historical side tracks
 - [`General Files/README.md`](General%20Files/README.md): legacy project assets and supporting documents
 
 ## Repository Map
@@ -35,7 +37,9 @@ This repository has accumulated a lot of parallel experiments over time. The goa
 - `gilgamesh_legacy/`: older generation of the training/simulation stack retained for reference
 - `SPICE/`: SPICE experiments and neuron-level validation work
 - `General Files/`: presentations, exported documents, images, and assorted project collateral
-- `Circuit Layout/`, `Component Datasheets/`, `primer/`, `Arduino MNIST/`, `snn_comparison/`: reference and exploratory material
+- `references/`: datasheets, primer material, vendored libraries, and shared standalone assets
+- `archive/`: exploratory or superseded side projects kept for historical context
+- `Arduino MNIST/`: earlier embedded experiment
 - `laptop-gui/`: separate GUI prototype work
 
 ## Working Conventions

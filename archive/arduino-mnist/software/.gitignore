@@ -1,0 +1,6 @@
+.vscode
+data
+images
+reconstructed
+arduino-interface
+*.csv

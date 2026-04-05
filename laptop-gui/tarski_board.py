@@ -20,7 +20,7 @@ except ImportError:
     print("Install pyserial: pip install pyserial")
     sys.exit(1)
 
-# Serial protocol constants (must match T1-devboard signals.hpp)
+# Serial protocol constants (must match t1-devboard signals.hpp)
 PORT_TRN_END = 0x04
 PORT_SIG     = 0x05
 PORT_ACK     = 0x06

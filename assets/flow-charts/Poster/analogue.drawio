@@ -1,0 +1,102 @@
+<mxfile host="65bd71144e" scale="20" border="0">
+    <diagram id="qf78Gn6DtIcFovDaV6zN" name="Page-1">
+        <mxGraphModel dx="878" dy="502" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="827" pageHeight="1169" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="2" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;endArrow=block;endFill=1;" edge="1" parent="1" source="3" target="5">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="3" value="Pre-processed data intput" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+                    <mxGeometry x="80" y="120" width="200" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="4" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="5" target="6">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="5" value="DAC controlled current sources" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+                    <mxGeometry x="100" y="200" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="6" value="&lt;span style=&quot;color: rgb(0, 0, 0);&quot;&gt;Dense Layer (9&amp;nbsp;&lt;/span&gt;&lt;span style=&quot;color: rgb(63, 63, 63); scrollbar-color: rgb(226, 226, 226) rgb(251, 251, 251);&quot; data-sfc-cb=&quot;&quot; data-sfc-root=&quot;c&quot; data-sfc-cp=&quot;&quot; class=&quot;T286Pc&quot;&gt;&lt;strong style=&quot;color: rgb(63, 63, 63); scrollbar-color: rgb(226, 226, 226) rgb(251, 251, 251);&quot; data-sfc-cb=&quot;&quot; data-sfc-root=&quot;c&quot; class=&quot;Yjhzub&quot;&gt;➞&lt;/strong&gt;&amp;nbsp;10&lt;/span&gt;&lt;span style=&quot;color: rgb(0, 0, 0);&quot;&gt;)&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+                    <mxGeometry x="100" y="280" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="7" value="Voltage Spike counting" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+                    <mxGeometry x="100" y="360" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="8" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;endArrow=block;endFill=1;strokeWidth=2;" edge="1" parent="1" source="6" target="7">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="140" y="340" as="sourcePoint"/>
+                        <mxPoint x="140" y="380" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="11" value="ArgMax" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+                    <mxGeometry x="100" y="440" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="12" style="edgeStyle=none;html=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;endArrow=block;endFill=1;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="7" target="11">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="210" y="410" as="sourcePoint"/>
+                        <mxPoint x="310" y="440" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="13" value="Output Prediction" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;" vertex="1" parent="1">
+                    <mxGeometry x="120" y="520" width="120" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="14" style="edgeStyle=none;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;endArrow=block;endFill=1;strokeWidth=2;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="11" target="13">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="300" y="500" as="sourcePoint"/>
+                        <mxPoint x="210" y="500" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="21" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;strokeWidth=2;rounded=0;curved=0;endArrow=block;endFill=1;" edge="1" parent="1" source="25" target="6">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="500" y="260" as="sourcePoint"/>
+                        <mxPoint x="299.9999999999999" y="300" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="26" style="edgeStyle=none;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;strokeWidth=2;rounded=0;curved=0;endArrow=block;endFill=1;" edge="1" parent="1" source="15" target="6">
+                    <mxGeometry relative="1" as="geometry"/>
+                </mxCell>
+                <mxCell id="15" value="90 Analogue MAC operations all running in parallel" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+                    <mxGeometry x="340" y="280" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="22" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;endArrow=none;endFill=0;strokeWidth=2;rounded=0;curved=0;" edge="1" parent="1" source="17">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="340" y="340" as="sourcePoint"/>
+                        <mxPoint x="220" y="320" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="17" value="9 Neurons&amp;nbsp;&lt;strong style=&quot;color: rgb(63, 63, 63); scrollbar-color: rgb(226, 226, 226) rgb(251, 251, 251);&quot; data-sfc-cb=&quot;&quot; data-sfc-root=&quot;c&quot; class=&quot;Yjhzub&quot;&gt;➞ &lt;/strong&gt;&lt;span style=&quot;color: rgb(63, 63, 63); scrollbar-color: rgb(226, 226, 226) rgb(251, 251, 251);&quot; data-sfc-cb=&quot;&quot; data-sfc-root=&quot;c&quot; class=&quot;Yjhzub&quot;&gt;90 Synapses&lt;/span&gt;&lt;div&gt;&lt;strong style=&quot;color: rgb(63, 63, 63); scrollbar-color: rgb(226, 226, 226) rgb(251, 251, 251);&quot; data-sfc-cb=&quot;&quot; data-sfc-root=&quot;c&quot; class=&quot;Yjhzub&quot;&gt;➞ &lt;/strong&gt;&lt;span style=&quot;color: rgb(63, 63, 63); scrollbar-color: rgb(226, 226, 226) rgb(251, 251, 251);&quot; data-sfc-cb=&quot;&quot; data-sfc-root=&quot;c&quot; class=&quot;Yjhzub&quot;&gt;10 Neurons&lt;/span&gt;&lt;strong style=&quot;color: rgb(63, 63, 63); scrollbar-color: rgb(226, 226, 226) rgb(251, 251, 251);&quot; data-sfc-cb=&quot;&quot; data-sfc-root=&quot;c&quot; class=&quot;Yjhzub&quot;&gt;&amp;nbsp;&lt;/strong&gt;&lt;/div&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+                    <mxGeometry x="340" y="360" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="19" value="SR Latches&amp;nbsp;&lt;span style=&quot;font-family: monospace; font-size: 0px; text-align: start; text-wrap-mode: nowrap;&quot;&gt;%3CmxGraphModel%3E%3Croot%3E%3CmxCell%20id%3D%220%22%2F%3E%3CmxCell%20id%3D%221%22%20parent%3D%220%22%2F%3E%3CmxCell%20id%3D%222%22%20value%3D%229%20Neurons%26amp%3Bnbsp%3B%26lt%3Bstrong%20style%3D%26quot%3Bcolor%3A%20rgb(63%2C%2063%2C%2063)%3B%20scrollbar-color%3A%20rgb(226%2C%20226%2C%20226)%20rgb(251%2C%20251%2C%20251)%3B%26quot%3B%20data-sfc-cb%3D%26quot%3B%26quot%3B%20data-sfc-root%3D%26quot%3Bc%26quot%3B%20class%3D%26quot%3BYjhzub%26quot%3B%26gt%3B%E2%9E%9E%20%26lt%3B%2Fstrong%26gt%3B%26lt%3Bspan%20style%3D%26quot%3Bcolor%3A%20rgb(63%2C%2063%2C%2063)%3B%20scrollbar-color%3A%20rgb(226%2C%20226%2C%20226)%20rgb(251%2C%20251%2C%20251)%3B%26quot%3B%20data-sfc-cb%3D%26quot%3B%26quot%3B%20data-sfc-root%3D%26quot%3Bc%26quot%3B%20class%3D%26quot%3BYjhzub%26quot%3B%26gt%3B90%20Synapses%26lt%3B%2Fspan%26gt%3B%26lt%3Bdiv%26gt%3B%26lt%3Bstrong%20style%3D%26quot%3Bcolor%3A%20rgb(63%2C%2063%2C%2063)%3B%20scrollbar-color%3A%20rgb(226%2C%20226%2C%20226)%20rgb(251%2C%20251%2C%20251)%3B%26quot%3B%20data-sfc-cb%3D%26quot%3B%26quot%3B%20data-sfc-root%3D%26quot%3Bc%26quot%3B%20class%3D%26quot%3BYjhzub%26quot%3B%26gt%3B%E2%9E%9E%20%26lt%3B%2Fstrong%26gt%3B%26lt%3Bspan%20style%3D%26quot%3Bcolor%3A%20rgb(63%2C%2063%2C%2063)%3B%20scrollbar-color%3A%20rgb(226%2C%20226%2C%20226)%20rgb(251%2C%20251%2C%20251)%3B%26quot%3B%20data-sfc-cb%3D%26quot%3B%26quot%3B%20data-sfc-root%3D%26quot%3Bc%26quot%3B%20class%3D%26quot%3BYjhzub%26quot%3B%26gt%3B10%20Neurons%26lt%3B%2Fspan%26gt%3B%26lt%3Bstrong%20style%3D%26quot%3Bcolor%3A%20rgb(63%2C%2063%2C%2063)%3B%20scrollbar-color%3A%20rgb(226%2C%20226%2C%20226)%20rgb(251%2C%20251%2C%20251)%3B%26quot%3B%20data-sfc-cb%3D%26quot%3B%26quot%3B%20data-sfc-root%3D%26quot%3Bc%26quot%3B%20class%3D%26quot%3BYjhzub%26quot%3B%26gt%3B%26amp%3Bnbsp%3B%26lt%3B%2Fstrong%26gt%3B%26lt%3B%2Fdiv%26gt%3B%22%20style%3D%22rounded%3D1%3BwhiteSpace%3Dwrap%3Bhtml%3D1%3BfillColor%3D%23ffe6cc%3BstrokeColor%3D%23d79b00%3B%22%20vertex%3D%221%22%20parent%3D%221%22%3E%3CmxGeometry%20x%3D%22340%22%20y%3D%22280%22%20width%3D%22160%22%20height%3D%2240%22%20as%3D%22geometry%22%2F%3E%3C%2FmxCell%3E%3C%2Froot%3E%3C%2FmxGraphModel%3E&lt;/span&gt;&lt;strong style=&quot;scrollbar-color: rgb(226, 226, 226) rgb(251, 251, 251); color: rgb(63, 63, 63);&quot; data-sfc-cb=&quot;&quot; data-sfc-root=&quot;c&quot; class=&quot;Yjhzub&quot;&gt;➞&amp;nbsp;&lt;/strong&gt;&lt;span style=&quot;scrollbar-color: rgb(226, 226, 226) rgb(251, 251, 251); color: rgb(63, 63, 63);&quot; data-sfc-cb=&quot;&quot; data-sfc-root=&quot;c&quot; class=&quot;Yjhzub&quot;&gt;Shift Registers&lt;/span&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+                    <mxGeometry x="340" y="440" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="20" value="Performed Externally" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+                    <mxGeometry x="340" y="520" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="23" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;endArrow=none;endFill=0;strokeWidth=2;rounded=0;curved=0;" edge="1" parent="1" source="19" target="7">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="350" y="340" as="sourcePoint"/>
+                        <mxPoint x="270" y="340" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="310" y="460"/>
+                            <mxPoint x="310" y="380"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="24" style="edgeStyle=orthogonalEdgeStyle;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;endArrow=none;endFill=0;strokeWidth=2;rounded=0;" edge="1" parent="1" source="20" target="11">
+                    <mxGeometry relative="1" as="geometry">
+                        <mxPoint x="350" y="410" as="sourcePoint"/>
+                        <mxPoint x="270" y="410" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="290" y="540"/>
+                            <mxPoint x="290" y="460"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="25" value="90 Weights in Synapses" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;" vertex="1" parent="1">
+                    <mxGeometry x="340" y="200" width="160" height="40" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

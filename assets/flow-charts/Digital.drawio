@@ -1,0 +1,49 @@
+<mxfile host="65bd71144e" scale="20" border="0">
+    <diagram id="joNV6q4o8SwO57QxvySy" name="Page-1">
+        <mxGraphModel dx="769" dy="441" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="900" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="2" value="Arduino" style="rounded=1;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+                    <mxGeometry x="560" y="360" width="80" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="3" value="Computer" style="rounded=0;whiteSpace=wrap;html=1;" parent="1" vertex="1">
+                    <mxGeometry x="560" y="240" width="80" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="4" value="" style="endArrow=openThin;html=1;exitX=0.75;exitY=1;exitDx=0;exitDy=0;strokeWidth=2;endFill=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;rounded=0;curved=1;" parent="1" source="3" target="2" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="720" y="400" as="sourcePoint"/>
+                        <mxPoint x="720" y="280" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="640" y="320"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="5" value="&lt;span style=&quot;color: rgb(63, 63, 63); background-color: transparent;&quot;&gt;1. Send image data&lt;/span&gt;" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" parent="1" vertex="1">
+                    <mxGeometry x="640" y="280" width="160" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="6" value="&lt;span style=&quot;color: rgb(63, 63, 63); background-color: transparent;&quot;&gt;2. Predict digit from data unsing ANN&lt;/span&gt;" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" parent="1" vertex="1">
+                    <mxGeometry x="640" y="360" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="7" value="" style="endArrow=openThin;html=1;exitX=0.25;exitY=0;exitDx=0;exitDy=0;strokeWidth=2;endFill=0;entryX=0.25;entryY=1;entryDx=0;entryDy=0;rounded=0;curved=1;" parent="1" source="2" target="3" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="490" y="270" as="sourcePoint"/>
+                        <mxPoint x="490" y="350" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="560" y="320"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="8" value="&lt;span style=&quot;color: rgb(63, 63, 63); background-color: transparent;&quot;&gt;3. Prediction and time taken&lt;/span&gt;" style="text;html=1;align=right;verticalAlign=middle;whiteSpace=wrap;rounded=0;" parent="1" vertex="1">
+                    <mxGeometry x="440" y="300" width="120" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="9" value="Image data :&lt;br&gt;36 int8 values [-128, 127]" style="text;html=1;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;" parent="1" vertex="1">
+                    <mxGeometry x="640" y="300" width="160" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="10" value="&lt;span style=&quot;color: rgb(63, 63, 63); background-color: transparent;&quot;&gt;ANN layout: 36-20-10&lt;br&gt;&lt;/span&gt;" style="text;html=1;align=right;verticalAlign=middle;whiteSpace=wrap;rounded=0;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="360" width="160" height="40" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

@@ -13,7 +13,7 @@ This repository has accumulated a lot of parallel experiments over time. The goa
 - [`docs/README.md`](docs/README.md): repository-level notes and top-level project documents
 - [`references/README.md`](references/README.md): datasheets, primer material, vendored references, and shared assets
 - [`archive/README.md`](archive/README.md): archived experiments and historical side tracks
-- [`General Files/README.md`](General%20Files/README.md): legacy project assets and supporting documents
+- [`assets/README.md`](assets/README.md): legacy project assets and supporting documents
 
 ## Repository Map
 
@@ -30,16 +30,16 @@ This repository has accumulated a lot of parallel experiments over time. The goa
 - `scope-probe/`: scripts for waveform capture and energy/power post-processing
 - `report/`: final report drafts, figures, scripts, and source notes
 - `Schematics/`: KiCad-era schematics and board-level design assets
-- `T1-devboard/`: firmware/interface work for the hardware control board
+- `t1-devboard/`: firmware/interface work for the hardware control board
 
 ### Supporting or historical areas
 
 - `gilgamesh_legacy/`: older generation of the training/simulation stack retained for reference
 - `SPICE/`: SPICE experiments and neuron-level validation work
-- `General Files/`: presentations, exported documents, images, and assorted project collateral
+- `assets/`: presentations, exported documents, images, and assorted project collateral
 - `references/`: datasheets, primer material, vendored libraries, and shared standalone assets
 - `archive/`: exploratory or superseded side projects kept for historical context
-- `Arduino MNIST/`: earlier embedded experiment
+- `archive/arduino-mnist/`: earlier embedded experiment
 - `laptop-gui/`: separate GUI prototype work
 
 ## Working Conventions

@@ -1,0 +1,9 @@
+[submodule "emulator"]
+	path = emulator
+	url = https://github.com/ETM-Code/Tarski-Emulator.git
+[submodule "gilgamesh"]
+	path = gilgamesh
+	url = https://github.com/ETM-Code/Gilgamesh.git
+[submodule "Schematics"]
+	path = Schematics
+	url = https://github.com/ETM-Code/Tarski-Schematics.git

@@ -1,29 +1,39 @@
-.vscode
+.vscode/
 **/.DS_Store
-**/__pycache__
-gilgamesh/comparison_outputs/comparison_detailed.json
-.assistant
-.assistant_docs
-**/no*.md
-!**/README*.md
-**/assistant*.md
-!**/EMBEDDED_GUIDE.md
-snntorch_reference
 
-# Python virtual environments
+# Local agent/tooling state
+.assistant/
+.assistant_docs/
+**/.assistant/
+**/.desloppify/
+voice/
+
+# Python
+**/__pycache__/
+**/*.py[cod]
+**/.venv/
 **/venv/
 
-# Rust build artifacts
+# JavaScript / frontend
+**/node_modules/
+**/dist/
+**/*.tsbuildinfo
+
+# Rust / native build outputs
 **/target/
 
-# MNIST data (downloaded separately)
-snntorch_rs/data/
+# Embedded / hardware tooling
+**/.pio/
 
-*.mov
-*.mp4
-
+# Project-specific generated files
+gilgamesh/comparison_outputs/comparison_detailed.json
 **/gilgamesh_output.txt
 
-voice
+# Downloaded or external reference trees
+snntorch_reference/
+snntorch_rs/data/
 
+# Media and temporary office files
+*.mov
+*.mp4
 ~$*

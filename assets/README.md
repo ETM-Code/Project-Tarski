@@ -4,13 +4,16 @@ This directory is a holding area for project collateral: exported PDFs, presenta
 
 It is intentionally retained for reference, but it is not the main source tree for code or reproducible tooling.
 
-## What Lives Here
+## Layout
 
-- Presentations and pitch materials
-- Exported planning and report documents
-- Rendered board images and poster assets
-- Supporting papers and background references
-- The `synapse-neuron-9x-report/` validation mini-project
+- `documents/`: plans, presentations, and report-style exports
+- `images/`: board renders, comparison images, poster graphics, and screenshots
+- `videos/`: standalone exported videos
+- `research-papers/`: external papers and background reading
+- `technical-notes/`: working documents, equations, netlists, and supporting technical exports
+- `demo-assets/`: logo files, demo-specific screenshots, and demo recordings
+- `flow-charts/`: draw.io source files and exported flow-chart graphics
+- `synapse-neuron-9x-report/`: self-contained validation mini-project with plots and PDF output
 
 ## Guidance
 

@@ -17,15 +17,7 @@ namespace Model
      * Predict from host-preprocessed hidden activations.
      * Input must be ReLU'd/clamped int8 activations with length HIDDEN_FEATURE_SIZE.
      */
-    u8 PredictClassFromHidden(const View<i8>& hidden_input);
-
-    /**
-     * Returns the confidence of the provided classification.
-     * @warning `classification` must be a valid return value from `PredictClass`.
-     * @param classification The classification for which you would like to know the confidence of.
-     * @return The percentage confidence of the classification.
-     */
-    f32 GetConfidence(u8 classification);
+    u8 PredictClass(const View<i8>& input);
 
     //  --- DEBUG METHODS ---
 

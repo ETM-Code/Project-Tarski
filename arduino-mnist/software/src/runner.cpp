@@ -38,7 +38,7 @@ bool Runner::DataLoad(Arduino& device, const CLI::Arguments& args)
 
     if(!args.repeat_mode)
     {
-        if(!device.loadHiddenData(std::span<i8>(hidden_data.data(), hidden_data.size())))
+        if(!device.loadData(hidden_data))
         {
             Logger::Error("Failed to load hidden activations to device");
             return false;
@@ -52,7 +52,7 @@ bool Runner::DataLoad(Arduino& device, const CLI::Arguments& args)
     Logger::Info("Sending sample repeatedly for %u second(s)", args.duration_seconds);
     while(std::chrono::steady_clock::now() < end_time)
     {
-        if(!device.loadHiddenData(std::span<i8>(hidden_data.data(), hidden_data.size())))
+        if(!device.loadData(hidden_data))
         {
             Logger::Error("Failed to load hidden activations during repeated load");
             return false;
@@ -72,8 +72,7 @@ bool Runner::Inference(Arduino& device, const CLI::Arguments& args)
 
     if(!args.repeat_mode)
     {
-        //  --- Set correct_prediction to 0xF0 to disable checking ---
-        if(!device.runClassification(data_sink, 0xF0))
+        if(!device.runClassification(data_sink, Arduino::NO_CHECK))
         {
             Logger::Error("Failed to run inference");
             return false;
@@ -87,7 +86,7 @@ bool Runner::Inference(Arduino& device, const CLI::Arguments& args)
     Logger::Info("Running inference repeatedly for %u second(s)", args.duration_seconds);
     while(std::chrono::steady_clock::now() < end_time)
     {
-        if(!device.runClassification(data_sink, 0xF0))
+        if(!device.runClassification(data_sink, Arduino::NO_CHECK))
         {
             Logger::Error("Failed during repeated inference");
             return false;
@@ -119,7 +118,7 @@ bool Runner::Prediction(Arduino& device, const CLI::Arguments& args)
             Logger::Error("Failed to preprocess sample into hidden activations");
             return false;
         }
-        if(!device.loadHiddenData(std::span<i8>(hidden_data.data(), hidden_data.size())))
+        if(!device.loadData(hidden_data))
         {
             Logger::Error("Failed to load hidden activations for prediction");
             return false;
@@ -145,7 +144,7 @@ bool Runner::Prediction(Arduino& device, const CLI::Arguments& args)
                 Logger::Error("Failed to preprocess sample '%s'", path);
                 return false;
             }
-            if(!device.loadHiddenData(std::span<i8>(hidden_data.data(), hidden_data.size())))
+            if(!device.loadData(hidden_data))
             {
                 Logger::Error("Failed to load hidden activations for sample '%s'", path);
                 return false;

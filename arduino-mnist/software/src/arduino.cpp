@@ -49,63 +49,115 @@ bool Arduino::printVersion(void)
     return true;
 }
 
-bool Arduino::loadData(std::span<u8>)
+bool Arduino::loadData(const std::span<i8> data)
 {
-    Logger::Error("Raw input load is no longer supported");
-    return false;
-}
-
-bool Arduino::loadHiddenData(std::span<i8> hidden)
-{
-    if(hidden.size() < HIDDEN_SIZE)
+    // Validate input data size
+    if(data.size() < HIDDEN_SIZE)
     {
-        Logger::Error("Hidden vector too small (expected %zu bytes)", HIDDEN_SIZE);
+        Logger::Error("Data size too small (expected %zu bytes)", HIDDEN_SIZE);
         return false;
     }
 
-    this->writeByte(PORT_LOAD_HIDDEN);
-    Logger::Info("Sent hidden-activation load request to device");
+    // Allocate a buffer for the echoed data
+    u8 data_echo[HIDDEN_SIZE];
 
+    // Send command to arduino
+    this->writeByte(PORT_LOAD);
+    Logger::Info("Sent load request to device");
+
+    // Await for the device to respond
     if(!this->awaitData()) return ::Error::DeviceTimeout();
-    if(this->readByte() != PORT_ACK) return ::Error::DeviceNAK("hidden load request");
+    if(this->readByte() != PORT_ACK) return ::Error::DeviceNAK("load request");
+    Logger::Info("Device acknowledged load request");
 
-    this->writeBytes(reinterpret_cast<const u8*>(hidden.data()), HIDDEN_SIZE);
+    // Send sample data to the arduino
+    this->writeBytes(reinterpret_cast<const u8*>(data.data()), HIDDEN_SIZE);
 
+    // Wait for the device to acknowledge data recieved
     if(!this->awaitData()) return ::Error::DeviceTimeout();
-    if(this->readByte() != PORT_ACK) return ::Error::DeviceNAK("hidden data received");
+    if(this->readByte() != PORT_ACK) return ::Error::DeviceNAK("data received");
+    Logger::Info("Device acknowledged data received");
 
-    if(!this->awaitData()) return ::Error::DeviceTimeout();
-    if(this->readByte() != PORT_TRN_END)
+    // Await for the arduino to echo the data for validation
+    if(!this->awaitData(HIDDEN_SIZE))
     {
-        Logger::Error("Hidden load did not terminate communication appropriately");
+        Logger::Error("Device has not echoed image data in time");
         return false;
     }
+    this->readBytes(data_echo, HIDDEN_SIZE);
+
+    // Compare TX'd and RX'd data
+    bool valid = true;
+    for(u32 i = 0; i < HIDDEN_SIZE; i++)
+    {
+        if(data[i] != data_echo[i]) { valid = false; break; }
+    }
+
+    // Confirm if data was transmitted successfully
+    if(!valid)
+    {
+        this->writeByte(PORT_NAK);
+        Logger::Error("Device did not echo image data successfully");
+        return false;
+    }
+
+    // Acknowledge TX'd and RX'd data match
+    this->writeByte(PORT_ACK);
+    Logger::Info("Device echoed sample data successfully");
+    Logger::Info("Data load successful");
 
     return true;
 }
 
 bool Arduino::runClassification(FILE* output_sink, u8 correct_classification)
 {
+    // Send command to arduino
     this->writeByte(PORT_INFER);
     Logger::Info("Sent infer data request to device");
 
-    if(!this->awaitData()) return ::Error::DeviceTimeout();
+    // Wait for the device to respond and acknowledge
+    if(!this->awaitData())           return ::Error::DeviceTimeout();
     if(this->readByte() != PORT_ACK) return ::Error::DeviceNAK("infer request");
+    Logger::Info("Device acknowledged infer request");
 
-    if(!this->awaitData()) return ::Error::DeviceTimeout();
+    // Wait for the device to respond
+    if(!this->awaitData(2)) return ::Error::DeviceTimeout();
     const u8 prediction = this->readByte();
+    const u8 response = this->readByte();
 
+    if(response == PORT_MSG) // The deivce is transmitting a message that is to be logged
+    {
+        Logger::Info("Device transmitting message");
+        
+        while(this->awaitData())
+        {
+            u8 data = this->readByte();
+            if(data == PORT_MSG_END) break;
+
+            std::fputc(data, output_sink);
+        }
+        if(correct_classification != NO_CHECK)
+            std::fprintf(output_sink, ",%hhu,%s", correct_classification, prediction == correct_classification ? "true" : "false");
+        std::fputc('\n', output_sink);
+        Logger::Info("Device ended message transmission");
+    }
+    else if(response == PORT_TRN_END) // The device had no data to send and ended transmission
+    {
+        // Do nothing in this case
+    }
+    else // Unexpected device response
+    {
+        Logger::Error("Device responded with unexpected data: 0x%02X", response);
+        return false;
+    }
+
+    // Wait for the device to end transmission
     if(!this->awaitData()) return ::Error::DeviceTimeout();
     if(this->readByte() != PORT_TRN_END)
     {
         Logger::Error("Device has not ended transmission successfully");
         return false;
     }
-
-    if(correct_classification != 0xF0)
-        std::fprintf(output_sink, "-1,%hhu,%hhu,%s\n", prediction, correct_classification, prediction == correct_classification ? "true" : "false");
-    else
-        std::fprintf(output_sink, "-1,%hhu\n", prediction);
 
     return true;
 }

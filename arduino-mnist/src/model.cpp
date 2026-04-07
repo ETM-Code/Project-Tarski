@@ -1,5 +1,5 @@
 #include "model.hpp"
-#include "weights_fc2.hpp"
+#include "weights.hpp"
 
 struct neuron_t
 {
@@ -74,16 +74,10 @@ void Model::Init(void)
     }
 }
 
-u8 Model::PredictClassFromHidden(const View<i8>& hidden_input)
+u8 Model::PredictClass(const View<i8>& input)
 {
-    Model::ProcessDenseLayer(output_layer, hidden_input, output, FC2_BIAS_ALIGN_SHIFT, FC2_REQUANT_SHIFT);
+    Model::ProcessDenseLayer(output_layer, input, output, FC2_BIAS_ALIGN_SHIFT, FC2_REQUANT_SHIFT);
     return Model::ArgMax(output);
-}
-
-f32 Model::GetConfidence(u8 classification)
-{
-    (void)classification;
-    return 0;
 }
 
 const View<i32>& Model::getL2Output(void)

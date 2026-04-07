@@ -7,34 +7,32 @@
  * Format: real_value = int_value * scale
  */
 
-#ifndef STANDARDANN_INT8_SHIFT_FC2_WEIGHTS_8BIT_H
-#define STANDARDANN_INT8_SHIFT_FC2_WEIGHTS_8BIT_H
+#pragma once
 
 #include <stdint.h>
 
 /* Network Configuration */
-#define STANDARDANN_INT8_SHIFT_FC2_INPUT_SIZE  36
-#define STANDARDANN_INT8_SHIFT_FC2_HIDDEN_SIZE 12
-#define STANDARDANN_INT8_SHIFT_FC2_OUTPUT_SIZE 10
-#define STANDARDANN_INT8_SHIFT_FC2_BITS        8
+#define ANN_INPUT_SIZE  36
+#define ANN_HIDDEN_SIZE 12
+#define ANN_OUTPUT_SIZE 10
+#define ANN_BITS        8
 
 /* Shift amounts for integer-only inference (scale = 2^shift) */
 /* Use these for requantization: out = (acc + (1 << (shift-1))) >> shift */
-#define STANDARDANN_INT8_SHIFT_FC2_INPUT_SHIFT (0)
-#define STANDARDANN_INT8_SHIFT_FC2_FC1_WEIGHT_SHIFT (-8)
-#define STANDARDANN_INT8_SHIFT_FC2_FC1_BIAS_SHIFT (-9)
-#define STANDARDANN_INT8_SHIFT_FC2_FC1_OUTPUT_SHIFT (2)
-#define STANDARDANN_INT8_SHIFT_FC2_FC2_WEIGHT_SHIFT (-7)
-#define STANDARDANN_INT8_SHIFT_FC2_FC2_BIAS_SHIFT (-8)
-#define STANDARDANN_INT8_SHIFT_FC2_FC2_OUTPUT_SHIFT (-1)
+#define INPUT_SHIFT           ( 0)
+#define FC1_WEIGHT_SHIFT      (-8)
+#define FC1_BIAS_SHIFT        (-9)
+#define FC1_OUTPUT_SHIFT      ( 2)
+#define FC2_WEIGHT_SHIFT      (-7)
+#define FC2_BIAS_SHIFT        (-8)
+#define FC2_OUTPUT_SHIFT      (-1)
 
 /* Pre-computed shift amounts for integer-only inference */
 /* Convention: positive = left shift, negative = right shift */
-/* Use shift_round() helper: if shift >= 0: x << shift, else: (x + (1 << (-shift-1))) >> (-shift) */
-#define STANDARDANN_INT8_SHIFT_FC2_FC1_REQUANT_SHIFT (-10)  /* acc_shift - out_shift */
-#define STANDARDANN_INT8_SHIFT_FC2_FC1_BIAS_ALIGN_SHIFT (-1)  /* bias_shift - acc_shift */
-#define STANDARDANN_INT8_SHIFT_FC2_FC2_REQUANT_SHIFT (-4)  /* acc_shift - out_shift */
-#define STANDARDANN_INT8_SHIFT_FC2_FC2_BIAS_ALIGN_SHIFT (-3)  /* bias_shift - acc_shift */
+#define FC1_REQUANT_SHIFT     (-10) /* acc_shift - out_shift */
+#define FC1_BIAS_ALIGN_SHIFT  ( -1) /* bias_shift - acc_shift */
+#define FC2_REQUANT_SHIFT     ( -4) /* acc_shift - out_shift */
+#define FC2_BIAS_ALIGN_SHIFT  ( -3) /* bias_shift - acc_shift */
 
 /*
  * OPTIONAL: Scale factors for debugging/verification.
@@ -44,13 +42,13 @@
 #ifdef STANDARDANN_INT8_SHIFT_FC2_INCLUDE_SCALES
 
 /* Weight Scale Factors (real_value = int_value * scale) */
-#define STANDARDANN_INT8_SHIFT_FC2_FC2_WEIGHT_SCALE 0.0078125000f
-#define STANDARDANN_INT8_SHIFT_FC2_FC2_BIAS_SCALE 0.0039062500f
+#define FC2_WEIGHT_SCALE 0.0078125000f
+#define FC2_BIAS_SCALE 0.0039062500f
 
 #endif /* STANDARDANN_INT8_SHIFT_FC2_INCLUDE_SCALES */
 
 /* fc2_weight: shape=[10, 12], total=120 */
-static const int8_t StandardANN_Int8_Shift_fc2_fc2_weight[120] = {
+static const int8_t fc2_weight[120] = {
       36,   -6,   -9,   18,    6,    0,   -3,  -29,   -9,   23,   19,  -15,  -10,   -5,   22,  -20,
      -19,  -28,   18,    7,    8,  -18,  -24,  -31,   36,   37,   13,   19,   -6,   -3,   -1,    1,
      -16,  -30,   -3,   -5,   19,    1,  -16,    4,   -9,  -11,   19,   21,   -3,   14,  -15,   -7,
@@ -62,8 +60,6 @@ static const int8_t StandardANN_Int8_Shift_fc2_fc2_weight[120] = {
 };
 
 /* fc2_bias: shape=[10], total=10 */
-static const int8_t StandardANN_Int8_Shift_fc2_fc2_bias[10] = {
+static const int8_t fc2_bias[10] = {
      -67,  -36,  -68,  -31,  -75,  -37,  -45,  -77,  -66,   23,
 };
-
-#endif /* STANDARDANN_INT8_SHIFT_FC2_WEIGHTS_8BIT_H */

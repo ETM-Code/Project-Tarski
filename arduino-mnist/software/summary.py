@@ -1,3 +1,4 @@
+#!/bin/env python3
 import csv
 import statistics
 
@@ -9,10 +10,13 @@ def main():
     with open('results.csv', 'r') as file:
         reader = csv.reader(file)
         for row in reader:
+            if not row:
+                continue
+
             # Collect prediction times
             prediction_times.append(float(row[0]))
             # Count correct classifications
-            if row[3].lower() == 'true':
+            if row[-1].strip().lower() == 'true':
                 correct_count += 1
             total_count += 1
     

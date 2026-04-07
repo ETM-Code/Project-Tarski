@@ -27,7 +27,7 @@ namespace Device
     /**
      * Load host-preprocessed hidden activations (L1 output) over serial.
      */
-    void LoadHiddenData(void);
+    void LoadData(void);
 
     /**
      * Run's the inference model on the sample data and returns results onto the serial bus.

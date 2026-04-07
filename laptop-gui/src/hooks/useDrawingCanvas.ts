@@ -4,16 +4,22 @@ import { useCallback, useRef, useState } from 'react';
 export type PixelGrid = number[];
 
 const GRID_SIZE = 6;
+const HI_RES_SIZE = 28;
+const HI_RES_PIXEL_COUNT = HI_RES_SIZE * HI_RES_SIZE;
+const BASE_CONTACT_INTENSITY = 0.65; // First contact is a constant 65% grey.
+const OVERDRAW_INTENSITY_INCREMENT = 0.18; // Repeated passes brighten toward white.
+const ADJACENT_FALLOFF_MULTIPLIER = 0.6;
+const DIAGONAL_FALLOFF_MULTIPLIER = 0.3;
 
 export function useDrawingCanvas() {
   const [pixels, setPixels] = useState<PixelGrid>(new Array(36).fill(0));
   const [isHiRes, setIsHiRes] = useState(true);
-  const hiResRef = useRef<number[]>(new Array(28 * 28).fill(0));
+  const hiResRef = useRef<number[]>(new Array(HI_RES_PIXEL_COUNT).fill(0));
   const isDrawing = useRef(false);
 
   const clear = useCallback(() => {
     setPixels(new Array(36).fill(0));
-    hiResRef.current = new Array(28 * 28).fill(0);
+    hiResRef.current = new Array(HI_RES_PIXEL_COUNT).fill(0);
   }, []);
 
   /** Downscale 28x28 to 6x6 using average pooling. */
@@ -23,15 +29,15 @@ export function useDrawingCanvas() {
     // Use simple area averaging
     for (let gy = 0; gy < GRID_SIZE; gy++) {
       for (let gx = 0; gx < GRID_SIZE; gx++) {
-        const yStart = Math.floor((gy * 28) / GRID_SIZE);
-        const yEnd = Math.floor(((gy + 1) * 28) / GRID_SIZE);
-        const xStart = Math.floor((gx * 28) / GRID_SIZE);
-        const xEnd = Math.floor(((gx + 1) * 28) / GRID_SIZE);
+        const yStart = Math.floor((gy * HI_RES_SIZE) / GRID_SIZE);
+        const yEnd = Math.floor(((gy + 1) * HI_RES_SIZE) / GRID_SIZE);
+        const xStart = Math.floor((gx * HI_RES_SIZE) / GRID_SIZE);
+        const xEnd = Math.floor(((gx + 1) * HI_RES_SIZE) / GRID_SIZE);
         let sum = 0;
         let count = 0;
         for (let y = yStart; y < yEnd; y++) {
           for (let x = xStart; x < xEnd; x++) {
-            sum += src[y * 28 + x];
+            sum += src[y * HI_RES_SIZE + x];
             count++;
           }
         }
@@ -52,11 +58,15 @@ export function useDrawingCanvas() {
         for (let dx = -1; dx <= 1; dx++) {
           const px = cx + dx;
           const py = cy + dy;
-          if (px >= 0 && px < 28 && py >= 0 && py < 28) {
+          if (px >= 0 && px < HI_RES_SIZE && py >= 0 && py < HI_RES_SIZE) {
             const dist = Math.abs(dx) + Math.abs(dy);
-            const intensity = dist === 0 ? 1.0 : dist === 1 ? 0.6 : 0.3;
-            const idx = py * 28 + px;
-            grid[idx] = Math.min(1.0, grid[idx] + intensity);
+            const falloffMultiplier =
+              dist === 0 ? 1 : dist === 1 ? ADJACENT_FALLOFF_MULTIPLIER : DIAGONAL_FALLOFF_MULTIPLIER;
+            const baseIntensity = BASE_CONTACT_INTENSITY * falloffMultiplier;
+            const overdrawIncrement = OVERDRAW_INTENSITY_INCREMENT * falloffMultiplier;
+            const idx = py * HI_RES_SIZE + px;
+            const nextValue = Math.max(baseIntensity, grid[idx] + overdrawIncrement);
+            grid[idx] = Math.min(1.0, nextValue);
           }
         }
       }
@@ -82,17 +92,17 @@ export function useDrawingCanvas() {
   const setFromExternal = useCallback((p: number[]) => {
     setPixels(p.slice(0, 36));
     // Also update hi-res to match (upscale for display consistency)
-    const grid = new Array(28 * 28).fill(0);
+    const grid = new Array(HI_RES_PIXEL_COUNT).fill(0);
     for (let gy = 0; gy < GRID_SIZE; gy++) {
       for (let gx = 0; gx < GRID_SIZE; gx++) {
         const val = p[gy * GRID_SIZE + gx] ?? 0;
-        const yStart = Math.floor((gy * 28) / GRID_SIZE);
-        const yEnd = Math.floor(((gy + 1) * 28) / GRID_SIZE);
-        const xStart = Math.floor((gx * 28) / GRID_SIZE);
-        const xEnd = Math.floor(((gx + 1) * 28) / GRID_SIZE);
+        const yStart = Math.floor((gy * HI_RES_SIZE) / GRID_SIZE);
+        const yEnd = Math.floor(((gy + 1) * HI_RES_SIZE) / GRID_SIZE);
+        const xStart = Math.floor((gx * HI_RES_SIZE) / GRID_SIZE);
+        const xEnd = Math.floor(((gx + 1) * HI_RES_SIZE) / GRID_SIZE);
         for (let y = yStart; y < yEnd; y++) {
           for (let x = xStart; x < xEnd; x++) {
-            grid[y * 28 + x] = val;
+            grid[y * HI_RES_SIZE + x] = val;
           }
         }
       }
@@ -103,7 +113,7 @@ export function useDrawingCanvas() {
   /** Set pixels from an external 28x28 source (real MNIST hi-res) + matching 6x6. */
   const setFromExternal28 = useCallback((p6x6: number[], p28x28: number[]) => {
     setPixels(p6x6.slice(0, 36));
-    hiResRef.current = p28x28.slice(0, 784);
+    hiResRef.current = p28x28.slice(0, HI_RES_PIXEL_COUNT);
   }, []);
 
   return {

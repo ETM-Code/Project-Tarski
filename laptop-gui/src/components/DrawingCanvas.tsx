@@ -13,6 +13,8 @@ interface DrawingCanvasProps {
 
 const GRID_SIZE = 6;
 const CANVAS_PX = 360; // Pixel size of the canvas element
+const HI_RES_SIZE = 28;
+const HI_RES_INTERPOLATION_STEP = 0.35;
 
 export function DrawingCanvas({
   pixels,
@@ -24,6 +26,7 @@ export function DrawingCanvas({
   onClear,
 }: DrawingCanvasProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const lastHiResPointRef = useRef<{ x: number; y: number } | null>(null);
 
   // Draw the canvas
   const draw = useCallback(() => {
@@ -113,9 +116,27 @@ export function DrawingCanvas({
       if (!coords) return;
 
       if (isHiRes) {
-        const hx = (coords.x / CANVAS_PX) * 28;
-        const hy = (coords.y / CANVAS_PX) * 28;
-        onPaintHiRes(hx, hy);
+        const hx = (coords.x / CANVAS_PX) * HI_RES_SIZE;
+        const hy = (coords.y / CANVAS_PX) * HI_RES_SIZE;
+        const lastPoint = lastHiResPointRef.current;
+
+        if (lastPoint) {
+          const dx = hx - lastPoint.x;
+          const dy = hy - lastPoint.y;
+          const distance = Math.hypot(dx, dy);
+          const segments = Math.max(1, Math.ceil(distance / HI_RES_INTERPOLATION_STEP));
+
+          for (let step = 1; step <= segments; step++) {
+            const t = step / segments;
+            const ix = lastPoint.x + dx * t;
+            const iy = lastPoint.y + dy * t;
+            onPaintHiRes(ix, iy);
+          }
+        } else {
+          onPaintHiRes(hx, hy);
+        }
+
+        lastHiResPointRef.current = { x: hx, y: hy };
       } else {
         const gx = Math.floor((coords.x / CANVAS_PX) * GRID_SIZE);
         const gy = Math.floor((coords.y / CANVAS_PX) * GRID_SIZE);
@@ -130,6 +151,7 @@ export function DrawingCanvas({
   const handleMouseDown = useCallback(
     (e: React.MouseEvent<HTMLCanvasElement>) => {
       isDrawing.current = true;
+      lastHiResPointRef.current = null;
       handlePaint(e);
     },
     [isDrawing, handlePaint],
@@ -145,6 +167,7 @@ export function DrawingCanvas({
 
   const handleMouseUp = useCallback(() => {
     isDrawing.current = false;
+    lastHiResPointRef.current = null;
   }, [isDrawing]);
 
   // Right-click to erase

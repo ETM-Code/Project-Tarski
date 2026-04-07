@@ -9,6 +9,86 @@ import { PredictionDisplay } from './components/PredictionDisplay';
 import { SerialMonitor } from './components/SerialMonitor';
 
 type InputSource = 'draw' | 'mnist';
+const PIXEL_COUNT = 36;
+const PIXEL_MIN = 0;
+const PIXEL_MAX = 1;
+const MNIST_MEAN = 0.1307;
+const MNIST_STD = 0.3081;
+const TARGET_CONTRAST_MEAN = 0.14;
+const TARGET_CONTRAST_STD = 0.28;
+const MIN_CONTRAST_STD = 0.05;
+const MAX_POST_NORMALIZATION_MEAN = 0.16;
+const MIN_POST_NORMALIZATION_SCALE = 0.25;
+const TARGET_ACTIVE_PIXELS = 12;
+const MAX_ACTIVE_PIXELS_BEFORE_SPARSIFY = 16;
+const SPARSIFY_BLEND = 0.9;
+const FINAL_FOREGROUND_PIXELS = 10;
+const FOREGROUND_MIN_INTENSITY = 0.35;
+
+function clampPixel(value: number): number {
+  return Math.max(PIXEL_MIN, Math.min(PIXEL_MAX, value));
+}
+
+function preprocessCustomPixelsForInference(pixels: number[], useContrastNormalization: boolean): number[] {
+  const clipped = pixels.slice(0, PIXEL_COUNT).map(clampPixel);
+  if (!useContrastNormalization) {
+    return clipped;
+  }
+
+  const mean = clipped.reduce((sum, value) => sum + value, 0) / PIXEL_COUNT;
+  const variance = clipped.reduce((sum, value) => {
+    const delta = value - mean;
+    return sum + delta * delta;
+  }, 0) / PIXEL_COUNT;
+  const std = Math.sqrt(variance);
+  const safeStd = Math.max(std, MIN_CONTRAST_STD);
+  const scale = TARGET_CONTRAST_STD / safeStd;
+
+  const contrastNormalized = clipped.map((value) =>
+    clampPixel((value - mean) * scale + TARGET_CONTRAST_MEAN),
+  );
+  const normalizedMean =
+    contrastNormalized.reduce((sum, value) => sum + value, 0) / PIXEL_COUNT;
+
+  // Final guardrail: keep dense drawings from shifting to all-positive normalized values.
+  const meanConstrained = normalizedMean <= MAX_POST_NORMALIZATION_MEAN ? contrastNormalized : contrastNormalized.map((value) => {
+    const meanScale = Math.max(
+      MIN_POST_NORMALIZATION_SCALE,
+      MAX_POST_NORMALIZATION_MEAN / Math.max(normalizedMean, Number.EPSILON),
+    );
+    return clampPixel(value * meanScale);
+  });
+
+  const activePixels = meanConstrained.filter((value) => value > MNIST_MEAN).length;
+  if (activePixels <= MAX_ACTIVE_PIXELS_BEFORE_SPARSIFY) {
+    return meanConstrained;
+  }
+
+  const sorted = [...meanConstrained].sort((a, b) => b - a);
+  const thresholdIndex = Math.min(TARGET_ACTIVE_PIXELS - 1, sorted.length - 1);
+  const threshold = sorted[thresholdIndex];
+  const denom = Math.max(PIXEL_MAX - threshold, Number.EPSILON);
+  const sparsified = meanConstrained.map((value) => {
+    const sparse = clampPixel((value - threshold) / denom);
+    // Preserve some grayscale while forcing a sparse active set.
+    return clampPixel(sparse * SPARSIFY_BLEND + value * (1 - SPARSIFY_BLEND));
+  });
+
+  // Hard foreground extraction: keep only strongest cells so background maps
+  // to MNIST-like negative values after normalization.
+  const ranked = sparsified
+    .map((value, index) => ({ value, index }))
+    .sort((a, b) => b.value - a.value);
+  const keepCount = Math.min(FINAL_FOREGROUND_PIXELS, ranked.length);
+  const keepSet = new Set(ranked.slice(0, keepCount).map((entry) => entry.index));
+
+  return sparsified.map((value, index) => {
+    if (!keepSet.has(index)) {
+      return 0;
+    }
+    return clampPixel(Math.max(FOREGROUND_MIN_INTENSITY, value));
+  });
+}
 
 function App() {
   const [wsUrl, setWsUrl] = useState(
@@ -30,6 +110,8 @@ function App() {
   } = useDrawingCanvas();
 
   const [inputSource, setInputSource] = useState<InputSource>('draw');
+  const isMnistSource = inputSource === 'mnist';
+  const [useContrastNormalization, setUseContrastNormalization] = useState(true);
 
   // When MNIST sample is loaded via server, update pixels from frame data
   const handleLoadSample = useCallback(
@@ -69,11 +151,32 @@ function App() {
 
   // Send drawn image to board
   const sendToBoard = useCallback(() => {
+    const preprocessedPixels = preprocessCustomPixelsForInference(pixels, useContrastNormalization);
     // Apply MNIST normalization: (pixel - 0.1307) / 0.3081
     // Canvas pixels are in [0, 1] (same as pixel/255), matching the MNIST pipeline
-    const normalized = pixels.map((v) => (v - 0.1307) / 0.3081);
+    const normalized = preprocessedPixels.map((v) => (v - MNIST_MEAN) / MNIST_STD);
     send({ type: 'InferCustom', pixels: normalized });
-  }, [pixels, send]);
+  }, [pixels, send, useContrastNormalization]);
+
+  const markDrawingSource = useCallback(() => {
+    setInputSource((prev) => (prev === 'draw' ? prev : 'draw'));
+  }, []);
+
+  const handlePaintHiRes = useCallback(
+    (x: number, y: number) => {
+      markDrawingSource();
+      paintHiRes(x, y);
+    },
+    [markDrawingSource, paintHiRes],
+  );
+
+  const handlePaintLoRes = useCallback(
+    (gx: number, gy: number, value: number) => {
+      markDrawingSource();
+      paintLoRes(gx, gy, value);
+    },
+    [markDrawingSource, paintLoRes],
+  );
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -184,8 +287,8 @@ function App() {
             isHiRes={isHiRes}
             hiResData={hiResData}
             isDrawing={isDrawing}
-            onPaintHiRes={paintHiRes}
-            onPaintLoRes={paintLoRes}
+            onPaintHiRes={handlePaintHiRes}
+            onPaintLoRes={handlePaintLoRes}
             onClear={() => { clear(); setInputSource('draw'); }}
           />
 
@@ -219,6 +322,17 @@ function App() {
               <div>C = Clear</div>
             </div>
           </div>
+          <label
+            className="flex items-center gap-2 text-[11px] px-3 py-1.5 rounded-md"
+            style={{ background: '#0f172a', border: '1px solid #334155', color: '#94a3b8' }}
+          >
+            <input
+              type="checkbox"
+              checked={useContrastNormalization}
+              onChange={(e) => setUseContrastNormalization(e.target.checked)}
+            />
+            Contrast normalize custom input
+          </label>
         </div>
 
         {/* Right panel */}
@@ -234,8 +348,8 @@ function App() {
           {/* Prediction */}
           <PredictionDisplay
             prediction={status?.prediction ?? null}
-            trueLabel={status?.true_label ?? null}
-            correct={status?.correct ?? null}
+            trueLabel={isMnistSource ? (status?.true_label ?? null) : null}
+            correct={isMnistSource ? (status?.correct ?? null) : null}
             spikeCounts={frame?.output_spike_counts ?? []}
             timestep={frame?.timestep ?? 0}
             timeMs={frame?.time_ms ?? 0}

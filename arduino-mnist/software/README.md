@@ -119,6 +119,29 @@ Repeated inference for 30 seconds:
 ./arduino-interface /dev/ttyUSB0 -r -f -t 30 -o run_log.txt
 ```
 
+## WebSocket Bridge for `laptop-gui`
+
+If you want `laptop-gui` to use this `arduino-interface` binary directly (instead of emulator serial mode), run the lightweight bridge in this folder.
+
+1. Install bridge dependency:
+
+```bash
+bun install
+```
+
+2. Run bridge (default websocket: `ws://localhost:3012/ws`):
+
+```bash
+bun run bridge
+```
+
+Optional environment variables:
+
+- `ARDUINO_INTERFACE_BIN` (default: `./arduino-interface`)
+- `ARDUINO_SERIAL_PORT` (default: `/dev/cu.usbserial-10`)
+- `ARDUINO_SERIAL_BAUD` (default: `9600`)
+- `ARDUINO_BRIDGE_PORT` (default: `3012`)
+
 ## Data Contract
 
 ### Input binary format

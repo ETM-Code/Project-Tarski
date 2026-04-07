@@ -207,7 +207,7 @@ function App() {
                 color: connected ? '#fff' : '#475569',
                 border: `1px solid ${connected ? '#2563eb' : '#334155'}`,
                 opacity: connected ? 1 : 0.5,
-                tooling: connected ? 'pointer' : 'not-allowed',
+                cursor: connected ? 'pointer' : 'not-allowed',
               }}
             >
               SEND TO BOARD

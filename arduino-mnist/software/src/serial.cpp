@@ -15,8 +15,7 @@ struct Serial::Impl
 
     ~Impl()
     {
-        if(fd != -1)
-            ::close(fd);
+        if(fd != -1) ::close(fd);
     }
 };
 
@@ -48,14 +47,18 @@ Serial::Serial(const char* path, Baudrate baudrate, u32 timeout_ms)
     }
 
     // Wait for the port to be opened
-    sleep(2);
+    std::this_thread::sleep_for(std::chrono::seconds(2));
 
     // Set config to default values
     struct termios options {};
-    options.c_cflag = _baudrate | CS8 | CLOCAL | CREAD;
+    options.c_cflag = CS8 | CLOCAL | CREAD;
     options.c_iflag = IGNPAR;
     options.c_oflag = 0;
     options.c_lflag = 0;
+
+    // Configure input/output speed in a portable way (Linux/macOS).
+    cfsetispeed(&options, _baudrate);
+    cfsetospeed(&options, _baudrate);
 
     tcflush(_handle->fd, TCIFLUSH);
     int err = tcsetattr(_handle->fd, TCSANOW, &options);
@@ -122,7 +125,7 @@ u32 Serial::dataAvailable(void)
 [[nodiscard]] bool Serial::awaitData(u32 count)
 {
     using clock = std::chrono::steady_clock;
-    using timepoint = std::chrono::steady_clock::time_point;
+    using timepoint = clock::time_point;
     
     // Setup timeout variable
     const timepoint timeout_time = clock::now() + std::chrono::milliseconds(_timeout_ms);

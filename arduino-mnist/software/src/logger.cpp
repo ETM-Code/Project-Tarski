@@ -18,7 +18,12 @@ void Logger::DisplayUsage(void)
 {
     //  --- Always log to stdout ---
     printf("Usage: %s <port> <-l|-r|-p> [<options>]\n", Logger::_exec_name);
-    printf("  <port>: Serial port path. e.g. /dev/ttyUSB0\n");
+    printf("  <port>: Serial port path. ");
+#if defined(__APPLE__)
+    printf("e.g. /dev/cu.usbmodem123401\n");
+#else
+    printf("e.g. /dev/ttyUSB0\n");
+#endif
     printf("  modes:\n");
     printf("    -l              Load binary sample data to the Arduino (requires -i <path>)\n");
     printf("    -r              Run inference on already-loaded data and read output\n");

@@ -1,8 +1,10 @@
 #include <chrono>
 #include <vector>
+#include <array>
 #include "runner.hpp"
 #include "file_handler.hpp"
 #include "logger.hpp"
+#include "preprocess.hpp"
 
 namespace Runner
 {
@@ -23,18 +25,22 @@ namespace Runner
 
 bool Runner::DataLoad(Arduino& device, const CLI::Arguments& args)
 {
-    //  --- Allocate a buffer for the sample data ---
     std::vector<u8> sample_data;
+    std::array<i8, Preprocess::HIDDEN_SIZE> hidden_data{};
 
-    if(!ReadSample(sample_data, args.input, Arduino::DATA_SIZE))
+    if(!ReadSample(sample_data, args.input, Preprocess::INPUT_SIZE))
         return false;
+    if(!Preprocess::ToHiddenActivations(sample_data, hidden_data))
+    {
+        Logger::Error("Failed to preprocess sample into hidden activations");
+        return false;
+    }
 
     if(!args.repeat_mode)
     {
-        //  --- Send the image data to the device ---
-        if(!device.loadData(sample_data))
+        if(!device.loadHiddenData(std::span<i8>(hidden_data.data(), hidden_data.size())))
         {
-            Logger::Error("Failed to load sample data to device");
+            Logger::Error("Failed to load hidden activations to device");
             return false;
         }
         return true;
@@ -46,9 +52,9 @@ bool Runner::DataLoad(Arduino& device, const CLI::Arguments& args)
     Logger::Info("Sending sample repeatedly for %u second(s)", args.duration_seconds);
     while(std::chrono::steady_clock::now() < end_time)
     {
-        if(!device.loadData(sample_data))
+        if(!device.loadHiddenData(std::span<i8>(hidden_data.data(), hidden_data.size())))
         {
-            Logger::Error("Failed to load sample data during repeated load");
+            Logger::Error("Failed to load hidden activations during repeated load");
             return false;
         }
         send_count++;
@@ -95,8 +101,8 @@ bool Runner::Inference(Arduino& device, const CLI::Arguments& args)
 
 bool Runner::Prediction(Arduino& device, const CLI::Arguments& args)
 {
-    //  --- Allocate a buffer for the sample and echoed data ---
     std::vector<u8> sample_data;
+    std::array<i8, Preprocess::HIDDEN_SIZE> hidden_data{};
 
     FileHandler::File data_sink = FileHandler::OpenDataSink(args.output);
     if(!data_sink)
@@ -104,13 +110,18 @@ bool Runner::Prediction(Arduino& device, const CLI::Arguments& args)
 
     if(!args.batch_mode)
     {
-        if(!ReadSample(sample_data, args.input, Arduino::DATA_SIZE + 1))
+        if(!ReadSample(sample_data, args.input, Preprocess::INPUT_SIZE + 1))
             return false;
 
-        const u8 classification = sample_data[Arduino::DATA_SIZE];
-        if(!device.loadData(sample_data))
+        const u8 classification = sample_data[Preprocess::INPUT_SIZE];
+        if(!Preprocess::ToHiddenActivations(sample_data, hidden_data))
         {
-            Logger::Error("Failed to load sample data for prediction");
+            Logger::Error("Failed to preprocess sample into hidden activations");
+            return false;
+        }
+        if(!device.loadHiddenData(std::span<i8>(hidden_data.data(), hidden_data.size())))
+        {
+            Logger::Error("Failed to load hidden activations for prediction");
             return false;
         }
         if(!device.runClassification(data_sink, classification))
@@ -125,13 +136,18 @@ bool Runner::Prediction(Arduino& device, const CLI::Arguments& args)
         {
             Logger::Info("Processing: %s", path);
 
-            if(!ReadSample(sample_data, path, Arduino::DATA_SIZE + 1))
+            if(!ReadSample(sample_data, path, Preprocess::INPUT_SIZE + 1))
                 return false;
 
-            const u8 classification = sample_data[Arduino::DATA_SIZE];
-            if(!device.loadData(sample_data))
+            const u8 classification = sample_data[Preprocess::INPUT_SIZE];
+            if(!Preprocess::ToHiddenActivations(sample_data, hidden_data))
             {
-                Logger::Error("Failed to load sample '%s'", path);
+                Logger::Error("Failed to preprocess sample '%s'", path);
+                return false;
+            }
+            if(!device.loadHiddenData(std::span<i8>(hidden_data.data(), hidden_data.size())))
+            {
+                Logger::Error("Failed to load hidden activations for sample '%s'", path);
                 return false;
             }
             if(!device.runClassification(data_sink, classification))

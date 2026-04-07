@@ -36,8 +36,8 @@ void loop()
             Device::SendSignature();
             break;
 
-        case PORT_LOAD:                         // Load sample data into arduino's memory
-            Device::LoadSampleData();
+        case PORT_LOAD_HIDDEN:                  // Load host-preprocessed hidden activations
+            Device::LoadHiddenData();
             break;
 
         case PORT_INFER:                        // Infer output from sample data and return results

@@ -1,18 +1,22 @@
-.PHONY: linux win
+.PHONY: all native linux mac win
 
-CC		= g++
+CXX		?= g++
 WCC		= x86_64-w64-mingw32-gcc-win32
 
-CFLAGS	= -Wall -Wextra -Iinclude -std=c++20
+CXXFLAGS	= -Wall -Wextra -Iinclude -std=c++20
 
 EXE		= arduino-interface
 
 SRC=$(wildcard src/*.cpp)
 
-all: linux win
+all: native
 
-linux:
-	$(CC) $(CFLAGS) -o $(EXE) $(SRC)
+native:
+	$(CXX) $(CXXFLAGS) -o $(EXE) $(SRC)
+
+linux: native
+
+mac: native
 
 win:
-	$(WCC) $(CFLAGS) -o $(EXE).exe $(SRC)
+	$(WCC) $(CXXFLAGS) -o $(EXE).exe $(SRC)

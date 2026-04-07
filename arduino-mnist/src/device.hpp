@@ -25,9 +25,9 @@ namespace Device
     void SendUnknownCommand(void);
 
     /**
-     * Load the transmitted sample data from the serial bus into the arduino's memory.
+     * Load host-preprocessed hidden activations (L1 output) over serial.
      */
-    void LoadSampleData(void);
+    void LoadHiddenData(void);
 
     /**
      * Run's the inference model on the sample data and returns results onto the serial bus.

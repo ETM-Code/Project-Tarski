@@ -1,6 +1,6 @@
 # SNNTorch Comparison Report
 
-Generated: 2026-02-03 11:49:09
+Generated: 2026-04-06 23:39:03
 
 ## Configuration (matching gilgamesh)
 
@@ -22,7 +22,7 @@ Generated: 2026-02-03 11:49:09
 
 | Model | Best Test Acc | Final Train Acc | Final Test Acc | Parameters |
 |-------|---------------|-----------------|----------------|------------|
-| StandardANN_Int8_Shift | 86.91% | 86.41% | 86.91% | 668 |
+| StandardANN_Int8_Shift | 83.84% | 83.36% | 83.84% | 574 |
 
 ## Model Descriptions
 

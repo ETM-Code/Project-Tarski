@@ -122,7 +122,7 @@ u32 Serial::dataAvailable(void)
 [[nodiscard]] bool Serial::awaitData(u32 count)
 {
     using clock = std::chrono::steady_clock;
-    using timepoint = std::chrono::_V2::steady_clock::time_point;
+    using timepoint = std::chrono::steady_clock::time_point;
     
     // Setup timeout variable
     const timepoint timeout_time = clock::now() + std::chrono::milliseconds(_timeout_ms);

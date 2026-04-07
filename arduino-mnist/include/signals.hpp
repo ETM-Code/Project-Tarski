@@ -13,6 +13,7 @@
 #define PORT_ACK        0x06            // Used for acknowledging data received
 #define PORT_NAK        0x15            // Used for acknowledging data not recieved or error
 #define PORT_LOAD       'L'             // Used to load a data sample into the arduino's memory
+#define PORT_LOAD_HIDDEN 'H'            // Used to load host-preprocessed L1 activations
 #define PORT_INFER      'I'             // Signals to the arduino to run the inference model
 // #define PORT_RDY        'R'
 // #define PORT_ERR        'E'

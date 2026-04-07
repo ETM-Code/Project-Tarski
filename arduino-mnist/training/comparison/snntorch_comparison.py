@@ -1958,7 +1958,7 @@ def quantize_with_shift(tensor: torch.Tensor, shift: int, bits: int) -> tuple:
     return int_weights, shift, 0
 
 
-def export_embedded_weights(model: nn.Module, name: str, bits: int, output_dir: Path, config: Config):
+def export_embedded_weights(model: nn.Module, name: str, bits: int, output_dir: Path, config: Config, split_fc=True):
     """
     Export model weights for embedded deployment.
 
@@ -1970,6 +1970,10 @@ def export_embedded_weights(model: nn.Module, name: str, bits: int, output_dir: 
     For shift-based models (*_shift), uses integer shift amounts instead of float scales.
     For fixed-scale models (*_fixed), uses the stored scales from training.
     For dynamic-scale models, computes scales from weight values.
+
+    If split_fc=True, generates separate headers for FC1 (laptop) and FC2 (Arduino):
+    - {name}_fc1_weights_{bits}bit.h (input -> hidden)
+    - {name}_fc2_weights_{bits}bit.h (hidden -> output)
     """
     output_dir = Path(output_dir)
     state_dict = model.state_dict()
@@ -2098,19 +2102,47 @@ def export_embedded_weights(model: nn.Module, name: str, bits: int, output_dir: 
     if is_shift_based:
         quantized_layers['_shift_amounts'] = shift_amounts
 
-    # Generate C header file
-    header_path = output_dir / f"{name}_weights_{bits}bit.h"
-    _generate_c_header(name, bits, quantized_layers, config, header_path)
+    # Handle split FC1/FC2 export for embedded systems
+    if split_fc:
+        # Separate FC1 and FC2 layers
+        fc1_layers = {}
+        fc2_layers = {}
 
-    # Generate binary file (packed weights)
-    bin_path = output_dir / f"{name}_weights_{bits}bit.bin"
-    _generate_binary_weights(quantized_layers, bits, bin_path)
+        for layer_name, layer_data in quantized_layers.items():
+            if layer_name.startswith('_'):  # Keep metadata
+                fc1_layers[layer_name] = layer_data
+                fc2_layers[layer_name] = layer_data
+            elif 'fc1' in layer_name:
+                fc1_layers[layer_name] = layer_data
+            elif 'fc2' in layer_name:
+                fc2_layers[layer_name] = layer_data
 
-    # Generate metadata JSON
-    meta_path = output_dir / f"{name}_weights_{bits}bit_meta.json"
-    _generate_metadata(name, bits, quantized_layers, config, meta_path)
+        # Generate separate header files
+        fc1_name = f"{name}_fc1"
+        fc2_name = f"{name}_fc2"
 
-    return header_path, bin_path, meta_path
+        fc1_header_path = output_dir / f"{fc1_name}_weights_{bits}bit.h"
+        _generate_c_header(fc1_name, bits, fc1_layers, config, fc1_header_path)
+
+        fc2_header_path = output_dir / f"{fc2_name}_weights_{bits}bit.h"
+        _generate_c_header(fc2_name, bits, fc2_layers, config, fc2_header_path)
+
+        return fc1_header_path, fc2_header_path
+    else:
+        # Original behavior: single unified header
+        # Generate C header file
+        header_path = output_dir / f"{name}_weights_{bits}bit.h"
+        _generate_c_header(name, bits, quantized_layers, config, header_path)
+
+        # Generate binary file (packed weights)
+        bin_path = output_dir / f"{name}_weights_{bits}bit.bin"
+        _generate_binary_weights(quantized_layers, bits, bin_path)
+
+        # Generate metadata JSON
+        meta_path = output_dir / f"{name}_weights_{bits}bit_meta.json"
+        _generate_metadata(name, bits, quantized_layers, config, meta_path)
+
+        return header_path, bin_path, meta_path
 
 
 def _generate_c_header(name: str, bits: int, layers: dict, config: Config, path: Path):
@@ -2888,7 +2920,7 @@ def main():
                        help='Output directory for results')
     parser.add_argument('--hidden-size', type=int, default=12,
                        help='Hidden layer size (default: 12)')
-    parser.add_argument('--epochs', type=int, default=15,
+    parser.add_argument('--epochs', type=int, default=5,
                        help='Number of training epochs')
     parser.add_argument('--batch-size', type=int, default=128,
                        help='Batch size')
@@ -3032,9 +3064,10 @@ def main():
         # Export embedded weights and verify for quantized models
         if 'int16' in model_key or 'int8' in model_key or 'int4' in model_key:
             bits = 16 if 'int16' in model_key else (8 if 'int8' in model_key else 4)
-            h_path, bin_path, meta_path = export_embedded_weights(model, name, bits, output_dir, config)
-            print(f"Embedded C header saved to {h_path}")
-            print(f"Embedded binary saved to {bin_path}")
+            # Export with split FC1/FC2 for embedded deployment
+            fc1_path, fc2_path = export_embedded_weights(model, name, bits, output_dir, config, split_fc=True)
+            print(f"FC1 C header (laptop preprocessing) saved to {fc1_path}")
+            print(f"FC2 C header (Arduino inference) saved to {fc2_path}")
 
             # Verify integer-only inference matches training
             verification = verify_integer_inference(model, model_key, bits, config, test_loader, device)

@@ -6,6 +6,7 @@ interface MnistSelectorProps {
   currentIndex: number | null;
   totalSamples: number;
   onLoadSample: (index: number) => void;
+  disabled?: boolean;
 }
 
 export function MnistSelector({
@@ -13,17 +14,21 @@ export function MnistSelector({
   currentIndex,
   totalSamples,
   onLoadSample,
+  disabled = false,
 }: MnistSelectorProps) {
   const [inputIndex, setInputIndex] = useState('');
 
   const loadByIndex = useCallback(
     (idx: number) => {
       if (idx >= 0 && (totalSamples === 0 || idx < totalSamples)) {
+        if (disabled) {
+          return;
+        }
         send({ type: 'LoadSample', index: idx });
         onLoadSample(idx);
       }
     },
-    [send, totalSamples, onLoadSample],
+    [disabled, send, totalSamples, onLoadSample],
   );
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -64,6 +69,7 @@ export function MnistSelector({
           min={0}
           max={totalSamples > 0 ? totalSamples - 1 : undefined}
           className="flex-1 px-2 py-1 rounded text-[11px]"
+          disabled={disabled}
           style={{
             background: '#0f172a',
             border: '1px solid #334155',
@@ -83,21 +89,27 @@ export function MnistSelector({
       {/* Navigation buttons */}
       <div className="flex items-center gap-2">
         <button
+          type="button"
           onClick={() => loadByIndex(Math.max(0, (currentIndex ?? 0) - 1))}
+          disabled={disabled}
           className="flex-1 py-1 rounded text-[11px] font-medium transition-opacity hover:opacity-80"
           style={{ background: '#0f172a', border: '1px solid #334155', color: '#94a3b8' }}
         >
           PREV
         </button>
         <button
+          type="button"
           onClick={() => loadByIndex((currentIndex ?? -1) + 1)}
+          disabled={disabled}
           className="flex-1 py-1 rounded text-[11px] font-medium transition-opacity hover:opacity-80"
           style={{ background: '#0f172a', border: '1px solid #334155', color: '#94a3b8' }}
         >
           NEXT
         </button>
         <button
+          type="button"
           onClick={() => loadByIndex(Math.floor(Math.random() * Math.max(1, totalSamples)))}
+          disabled={disabled}
           className="flex-1 py-1 rounded text-[11px] font-medium transition-opacity hover:opacity-80"
           style={{ background: '#0f172a', border: '1px solid #334155', color: '#94a3b8' }}
         >

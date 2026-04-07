@@ -7,6 +7,7 @@ import { PixelPreview } from './components/PixelPreview';
 import { MnistSelector } from './components/MnistSelector';
 import { PredictionDisplay } from './components/PredictionDisplay';
 import { SerialMonitor } from './components/SerialMonitor';
+import type { EndpointKind } from './types/protocol';
 
 type InputSource = 'draw' | 'mnist';
 const PIXEL_COUNT = 36;
@@ -24,6 +25,10 @@ const MAX_ACTIVE_PIXELS_BEFORE_SPARSIFY = 16;
 const SPARSIFY_BLEND = 0.9;
 const FINAL_FOREGROUND_PIXELS = 10;
 const FOREGROUND_MIN_INTENSITY = 0.35;
+const DEFAULT_ARDUINO_SERIAL_PORT = '/dev/cu.usbserial-10';
+const DEFAULT_SERIAL_BAUD = 9600;
+const EMULATOR_WS_PORT = 3001;
+const ARDUINO_BRIDGE_WS_PORT = 3012;
 
 function clampPixel(value: number): number {
   return Math.max(PIXEL_MIN, Math.min(PIXEL_MAX, value));
@@ -91,10 +96,18 @@ function preprocessCustomPixelsForInference(pixels: number[], useContrastNormali
 }
 
 function App() {
+  const host = window.location.hostname || 'localhost';
+  const emulatorWsUrl = `ws://${host}:${EMULATOR_WS_PORT}/ws`;
+  const arduinoBridgeWsUrl = `ws://${host}:${ARDUINO_BRIDGE_WS_PORT}/ws`;
   const [wsUrl, setWsUrl] = useState(
-    `ws://${window.location.hostname || 'localhost'}:3001/ws`,
+    emulatorWsUrl,
   );
   const { connected, frame, status, send, serialLog } = useWebSocket(wsUrl);
+  const emulatorSocket = useWebSocket(emulatorWsUrl);
+  const [backendKind, setBackendKind] = useState<EndpointKind>('local_emulator');
+  const [arduinoPort, setArduinoPort] = useState(DEFAULT_ARDUINO_SERIAL_PORT);
+  const mnistStatus = emulatorSocket.status ?? status;
+  const mnistNavigationDisabled = backendKind === 'serial_arduino' && !emulatorSocket.connected;
 
   const {
     pixels,
@@ -113,6 +126,36 @@ function App() {
   const isMnistSource = inputSource === 'mnist';
   const [useContrastNormalization, setUseContrastNormalization] = useState(true);
 
+  useEffect(() => {
+    if (!connected) {
+      return;
+    }
+
+    send({
+      type: 'SetEndpoint',
+      endpoint_kind: backendKind,
+      endpoint_address: backendKind === 'serial_arduino' ? arduinoPort : null,
+      endpoint_baud: backendKind === 'serial_arduino' ? DEFAULT_SERIAL_BAUD : null,
+    });
+  }, [arduinoPort, backendKind, connected, send]);
+
+  useEffect(() => {
+    setWsUrl(backendKind === 'serial_arduino' ? arduinoBridgeWsUrl : emulatorWsUrl);
+  }, [arduinoBridgeWsUrl, backendKind, emulatorWsUrl]);
+
+  useEffect(() => {
+    if (status?.endpoint_kind && status.endpoint_kind !== backendKind) {
+      setBackendKind(status.endpoint_kind);
+    }
+    if (
+      status?.endpoint_kind === 'serial_arduino' &&
+      status.endpoint_address &&
+      status.endpoint_address !== arduinoPort
+    ) {
+      setArduinoPort(status.endpoint_address);
+    }
+  }, [arduinoPort, backendKind, status?.endpoint_address, status?.endpoint_kind]);
+
   // When MNIST sample is loaded via server, update pixels from frame data
   const handleLoadSample = useCallback(
     (_index: number) => {
@@ -124,30 +167,30 @@ function App() {
   // Update canvas when a new MNIST sample is loaded (keyed on sample_index)
   const lastLoadedIndex = useRef<number | null>(null);
   useEffect(() => {
-    const idx = status?.sample_index ?? null;
+    const idx = mnistStatus?.sample_index ?? null;
     if (
       idx !== null &&
       idx !== lastLoadedIndex.current &&
-      status?.sample_pixels &&
-      status.sample_pixels.length === 36
+      mnistStatus?.sample_pixels &&
+      mnistStatus.sample_pixels.length === 36
     ) {
       lastLoadedIndex.current = idx;
       // Server pixels are MNIST-normalized: (pixel/255 - 0.1307) / 0.3081
       // Convert back to [0, 1] for canvas display
-      const displayPixels = status.sample_pixels.map((p) => {
+      const displayPixels = mnistStatus.sample_pixels.map((p) => {
         const raw = p * 0.3081 + 0.1307;
         return Math.max(0, Math.min(1, raw));
       });
 
-      if (status.sample_pixels_28x28 && status.sample_pixels_28x28.length === 784) {
+      if (mnistStatus.sample_pixels_28x28 && mnistStatus.sample_pixels_28x28.length === 784) {
         // Use real 28x28 MNIST data for hi-res view
-        setFromExternal28(displayPixels, status.sample_pixels_28x28);
+        setFromExternal28(displayPixels, mnistStatus.sample_pixels_28x28);
         setIsHiRes(true);
       } else {
         setFromExternal(displayPixels);
       }
     }
-  }, [status?.sample_index, status?.sample_pixels, status?.sample_pixels_28x28, setFromExternal, setFromExternal28, setIsHiRes]);
+  }, [mnistStatus?.sample_index, mnistStatus?.sample_pixels, mnistStatus?.sample_pixels_28x28, setFromExternal, setFromExternal28, setIsHiRes]);
 
   // Send drawn image to board
   const sendToBoard = useCallback(() => {
@@ -188,16 +231,16 @@ function App() {
           send(frame?.running ? { type: 'Pause' } : { type: 'Play' });
           break;
         case 'ArrowRight':
-          send({
+          emulatorSocket.send({
             type: 'LoadSample',
-            index: (status?.sample_index ?? 0) + 1,
+            index: (mnistStatus?.sample_index ?? 0) + 1,
           });
           setInputSource('mnist');
           break;
         case 'ArrowLeft':
-          send({
+          emulatorSocket.send({
             type: 'LoadSample',
-            index: Math.max(0, (status?.sample_index ?? 0) - 1),
+            index: Math.max(0, (mnistStatus?.sample_index ?? 0) - 1),
           });
           setInputSource('mnist');
           break;
@@ -212,7 +255,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [frame?.running, status?.sample_index, send, sendToBoard, clear]);
+  }, [frame?.running, mnistStatus?.sample_index, send, sendToBoard, clear, emulatorSocket]);
 
   return (
     <div className="flex flex-col h-screen" style={{ background: '#020617' }}>
@@ -239,6 +282,10 @@ function App() {
           connected={connected}
           wsUrl={wsUrl}
           onUrlChange={setWsUrl}
+          backendKind={backendKind}
+          backendPort={arduinoPort}
+          onBackendKindChange={setBackendKind}
+          onBackendPortChange={setArduinoPort}
         />
       </div>
 
@@ -357,11 +404,20 @@ function App() {
 
           {/* MNIST selector */}
           <MnistSelector
-            send={send}
-            currentIndex={status?.sample_index ?? null}
-            totalSamples={status?.total_samples ?? 0}
+            send={emulatorSocket.send}
+            currentIndex={mnistStatus?.sample_index ?? null}
+            totalSamples={mnistStatus?.total_samples ?? 0}
             onLoadSample={handleLoadSample}
+            disabled={mnistNavigationDisabled}
           />
+          {mnistNavigationDisabled ? (
+            <div
+              className="p-2.5 rounded-lg text-[10px]"
+              style={{ background: '#3f2b12', border: '1px solid #78350f', color: '#fcd34d' }}
+            >
+              Start emulator backend on localhost:3001 to use MNIST Prev/Next while in Arduino mode.
+            </div>
+          ) : null}
 
           {/* Simulation controls */}
           <div
@@ -405,6 +461,14 @@ function App() {
 
           {/* Serial Monitor */}
           <SerialMonitor entries={serialLog} />
+          {status?.endpoint_error ? (
+            <div
+              className="p-2.5 rounded-lg text-[10px]"
+              style={{ background: '#3f1d1d', border: '1px solid #7f1d1d', color: '#fecaca' }}
+            >
+              Backend error: {status.endpoint_error}
+            </div>
+          ) : null}
 
           {/* Keyboard help */}
           <div

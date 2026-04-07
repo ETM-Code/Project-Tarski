@@ -1,12 +1,25 @@
 import { useState } from 'react';
+import type { EndpointKind } from '../types/protocol';
 
 interface ConnectionStatusProps {
   connected: boolean;
   wsUrl: string;
   onUrlChange: (url: string) => void;
+  backendKind: EndpointKind;
+  backendPort: string;
+  onBackendKindChange: (kind: EndpointKind) => void;
+  onBackendPortChange: (port: string) => void;
 }
 
-export function ConnectionStatus({ connected, wsUrl, onUrlChange }: ConnectionStatusProps) {
+export function ConnectionStatus({
+  connected,
+  wsUrl,
+  onUrlChange,
+  backendKind,
+  backendPort,
+  onBackendKindChange,
+  onBackendPortChange,
+}: ConnectionStatusProps) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(wsUrl);
 
@@ -68,16 +81,47 @@ export function ConnectionStatus({ connected, wsUrl, onUrlChange }: ConnectionSt
           </button>
         </form>
       ) : (
-        <button
-          onClick={() => {
-            setDraft(wsUrl);
-            setEditing(true);
-          }}
-          className="text-[10px] hover:underline"
-          style={{ color: '#475569' }}
-        >
-          {wsUrl}
-        </button>
+        <>
+          <button
+            onClick={() => {
+              setDraft(wsUrl);
+              setEditing(true);
+            }}
+            className="text-[10px] hover:underline"
+            style={{ color: '#475569' }}
+          >
+            {wsUrl}
+          </button>
+          <select
+            value={backendKind}
+            onChange={(e) => onBackendKindChange(e.target.value as EndpointKind)}
+            className="px-2 py-0.5 rounded text-[10px]"
+            style={{
+              background: '#0f172a',
+              border: '1px solid #334155',
+              color: '#94a3b8',
+            }}
+          >
+            <option value="local_emulator">Emulator</option>
+            <option value="serial_arduino">Arduino</option>
+          </select>
+          {backendKind === 'serial_arduino' ? (
+            <input
+              type="text"
+              value={backendPort}
+              onChange={(e) => onBackendPortChange(e.target.value)}
+              className="px-2 py-0.5 rounded text-[10px]"
+              style={{
+                background: '#0f172a',
+                border: '1px solid #334155',
+                color: '#e2e8f0',
+                width: 170,
+                fontFamily: 'inherit',
+              }}
+              placeholder="/dev/cu.usbserial-10"
+            />
+          ) : null}
+        </>
       )}
     </div>
   );

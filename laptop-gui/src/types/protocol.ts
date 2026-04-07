@@ -70,6 +70,10 @@ export interface SimStatus {
   correct: boolean | null;
   sample_pixels?: number[];
   sample_pixels_28x28?: number[];
+  endpoint_kind?: EndpointKind;
+  endpoint_address?: string | null;
+  endpoint_baud?: number | null;
+  endpoint_error?: string | null;
 }
 
 export interface ProbeData {
@@ -94,4 +98,12 @@ export type ClientMessage =
   | { type: 'AddProbe'; net_name: string }
   | { type: 'RemoveProbe'; net_name: string }
   | { type: 'GetBoardInfo' }
-  | { type: 'InferCustom'; pixels: number[] };
+  | { type: 'InferCustom'; pixels: number[] }
+  | {
+      type: 'SetEndpoint';
+      endpoint_kind: EndpointKind;
+      endpoint_address: string | null;
+      endpoint_baud: number | null;
+    };
+
+export type EndpointKind = 'local_emulator' | 'serial_arduino' | 'serial_t1';

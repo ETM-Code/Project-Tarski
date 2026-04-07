@@ -2,5 +2,6 @@
 data
 images
 reconstructed
+output
 arduino-interface
 *.csv

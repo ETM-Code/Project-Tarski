@@ -4,4 +4,4 @@
 ./arduino-interface /dev/ttyUSB0 -p -b -i ./data -o results.csv
 
 # Print out results
-python3 summary.py
+python3 utilities/summary.py

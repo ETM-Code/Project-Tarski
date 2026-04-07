@@ -1,16 +1,14 @@
-# Arduino MNIST Host Tooling (`software/`)
+# Arduino MNIST Host Tooling
 
-This directory contains the host-side tools used to communicate with the Arduino MNIST firmware over serial, send quantized test images, trigger inference, and collect results.
+Host-side tools used to communicate with the Arduino MNIST firmware over serial, send quantized test images, trigger inference, and collect results.
 
-This is a **subproject** of the parent `arduino-mnist` repository. It is designed to work with the firmware/runtime in the repository root (`src/`, `include/`) and assumes the firmware implements the serial protocol described below.
-
-## What Is In This Folder
+## Folder Structure
 
 - `arduino-interface` (built from `src/*.cpp`): main CLI tool for serial communication.
-- `png_to_bin.py`: converts images into model-ready binary samples.
-- `bin_to_png.py`: converts binary samples back into 6x6 PNG images.
-- `summary.py`: computes average inference time and accuracy from `results.csv`.
-- `run_all.sh`: convenience wrapper for batch prediction + summary.
+- `utilities/png_to_bin.py`: converts images into model-ready binary samples.
+- `utilities/bin_to_png.py`: converts binary samples back into 6x6 PNG images.
+- `utilities/summary.py`: computes average inference time and accuracy from `results.csv`.
+- `utilities/run_all.sh`: convenience wrapper for batch prediction + summary.
 - `data/`: example `.bin` dataset (labeled 37-byte samples).
 - `test_data/test_6x6.bin`: minimal 36-byte sample (unlabeled).
 
@@ -19,8 +17,7 @@ This is a **subproject** of the parent `arduino-mnist` repository. It is designe
 ### `arduino-interface`
 
 - Implemented using POSIX serial APIs (`termios`, `ioctl`, `unistd`, `fcntl`).
-- Tested build path is Linux (`make linux`).
-- macOS may compile with adjustments but is not explicitly validated here.
+- Supported on Linux and macOS (`make linux` / `make mac`).
 - Native Windows is **not** supported by current source (`src/serial.cpp` is POSIX-specific).
 
 ### Python utilities
@@ -30,10 +27,10 @@ This is a **subproject** of the parent `arduino-mnist` repository. It is designe
 
 ## Build
 
-From `software/`:
-
 ```bash
 make linux
+# or
+make mac
 ```
 
 This produces:
@@ -42,8 +39,8 @@ This produces:
 
 Notes:
 
-- `make` default target builds both `linux` and `win`. The `win` target requires a MinGW cross-compiler (`x86_64-w64-mingw32-gcc-win32`) and may fail if that toolchain is missing.
-- A local build check of `make linux` succeeds in this directory.
+- `make` default target builds the native binary.
+- `linux` and `mac` currently map to the same native build target.
 
 ## CLI Tool: `arduino-interface`
 
@@ -53,7 +50,9 @@ Notes:
 ./arduino-interface <port> <-l|-r|-p> [options]
 ```
 
-- `<port>`: serial device path (for example `/dev/ttyUSB0` or `/dev/ttyACM0`)
+- `<port>`: serial device path:
+  - Linux: `/dev/ttyUSB0` or `/dev/ttyACM0`
+  - macOS: `/dev/cu.usbserial*` or `/dev/cu.usbmodem*`
 - Modes:
   - `-l`: load binary sample into device memory
   - `-r`: run inference on already-loaded sample
@@ -82,18 +81,24 @@ Load one sample:
 
 ```bash
 ./arduino-interface /dev/ttyUSB0 -l -i test_data/test_6x6.bin
+# macOS example:
+./arduino-interface /dev/cu.usbmodem14101 -l -i test_data/test_6x6.bin
 ```
 
 Run inference on previously loaded sample and print device message to stdout:
 
 ```bash
 ./arduino-interface /dev/ttyUSB0 -r
+# macOS example:
+./arduino-interface /dev/cu.usbmodem14101 -r
 ```
 
 Load and infer one labeled sample, save output:
 
 ```bash
 ./arduino-interface /dev/ttyUSB0 -p -i data/digit_7_0.bin -o results.csv
+# macOS example:
+./arduino-interface /dev/cu.usbmodem14101 -p -i data/digit_7_0.bin -o results.csv
 ```
 
 Batch prediction over all `.bin` files in `data/`:
@@ -151,21 +156,21 @@ So each line is typically:
 <firmware_message>,<expected_label>,<true|false>
 ```
 
-`summary.py` expects `results.csv` rows where:
+`utilities/summary.py` expects `results.csv` rows where:
 
 - column 0 is a numeric prediction time (float)
-- column 3 is `true`/`false` correctness
+- the last column is `true`/`false` correctness
 
-If your firmware message schema differs, update `summary.py` accordingly.
+If your firmware message schema differs, update `utilities/summary.py` accordingly.
 
 ## Image Conversion Utilities
 
-### `png_to_bin.py`
+### `utilities/png_to_bin.py`
 
 Converts images (`png/jpg/jpeg/bmp/gif`) to 6x6 int8 binary input.
 
 ```bash
-python3 png_to_bin.py <input_image_or_dir> <output_file_or_dir> [--batch] [--header] [--preview]
+python3 utilities/png_to_bin.py <input_image_or_dir> <output_file_or_dir> [--batch] [--header] [--preview]
 ```
 
 Behavior:
@@ -180,17 +185,17 @@ Behavior:
 Examples:
 
 ```bash
-python3 png_to_bin.py images/png/digit_3_0.png data/digit_3_0.bin
-python3 png_to_bin.py images/png data --batch
-python3 png_to_bin.py images/png/digit_3_0.png out.h --header
+python3 utilities/png_to_bin.py images/png/digit_3_0.png data/digit_3_0.bin
+python3 utilities/png_to_bin.py images/png data --batch
+python3 utilities/png_to_bin.py images/png/digit_3_0.png out.h --header
 ```
 
-### `bin_to_png.py`
+### `utilities/bin_to_png.py`
 
 Converts `.bin` back to 6x6 grayscale PNG.
 
 ```bash
-python3 bin_to_png.py <input_bin_or_dir> <output_png_or_dir> [--batch]
+python3 utilities/bin_to_png.py <input_bin_or_dir> <output_png_or_dir> [--batch]
 ```
 
 Behavior and constraint:
@@ -230,22 +235,22 @@ If firmware protocol diverges, host operations may timeout or fail handshake che
 - Batch mode iterates `.bin` files by directory iterator order; do not assume strict lexical ordering across platforms/filesystems.
 - Existing low-level I/O paths currently assume successful full read/write calls; partial I/O handling is limited.
 - `arduino-interface` only checks that input file size is at least required minimum (36 or 37), not exact size.
-- `summary.py` assumes `results.csv` exists in current working directory and follows expected column layout.
+- `utilities/summary.py` assumes `results.csv` exists in current working directory and follows expected column layout.
 
 ## Typical End-to-End Workflow
-
-From `software/`:
 
 1. Build host tool:
 
 ```bash
 make linux
+# or
+make mac
 ```
 
 2. (Optional) Generate `.bin` samples from PNG inputs:
 
 ```bash
-python3 png_to_bin.py images/png data --batch
+python3 utilities/png_to_bin.py images/png data --batch
 ```
 
 3. Run batch prediction and save CSV output:
@@ -257,7 +262,7 @@ python3 png_to_bin.py images/png data --batch
 4. Summarize performance/accuracy:
 
 ```bash
-python3 summary.py
+python3 utilities/summary.py
 ```
 
 Or use wrapper:
@@ -269,14 +274,13 @@ Or use wrapper:
 ## Troubleshooting
 
 - `ERROR: Unable to open serial port path.`
-  - Check correct device path and permissions (`dialout`/`uucp` group as applicable).
+  - Check correct device path and permissions.
+  - Linux: verify `/dev/ttyUSB*` or `/dev/ttyACM*`, and group membership (`dialout`/`uucp` as applicable).
+  - macOS: list candidates with `ls /dev/cu.usb* /dev/tty.usb*`.
 - `ERROR: Unable to set the requested configuration.`
   - Port might be busy or not a compatible TTY device.
 - `ERROR: Device did not respond.`
   - Firmware not running, wrong baud/protocol, or incorrect port.
 - `ERROR: Binary image file is too small.`
   - Provide at least 36 bytes (`-l`) or 37 bytes (`-p`).
-
-## Repository Context
-
-This folder is intended to be documented and versioned as the host-tooling component of the larger `arduino-mnist` project. Keep firmware-specific assumptions (protocol bytes, message format, expected sample layout) aligned with parent-repo firmware changes.
+  

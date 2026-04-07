@@ -1,0 +1,11 @@
+{
+  "name": "arduino-mnist-software-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bridge": "node ./arduino-ws-bridge.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  }
+}

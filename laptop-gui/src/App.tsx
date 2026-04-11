@@ -103,11 +103,13 @@ function App() {
     emulatorWsUrl,
   );
   const { connected, frame, status, send, serialLog } = useWebSocket(wsUrl);
-  const emulatorSocket = useWebSocket(emulatorWsUrl);
   const [backendKind, setBackendKind] = useState<EndpointKind>('local_emulator');
   const [arduinoPort, setArduinoPort] = useState(DEFAULT_ARDUINO_SERIAL_PORT);
-  const mnistStatus = emulatorSocket.status ?? status;
-  const mnistNavigationDisabled = backendKind === 'serial_arduino' && !emulatorSocket.connected;
+  const isArduinoBackend = backendKind === 'serial_arduino';
+  const mnistStatus = status;
+  const mnistSend = send;
+  const mnistNavigationDisabled = !connected;
+  const [lastMnistCommand, setLastMnistCommand] = useState<string>('none');
 
   const {
     pixels,
@@ -125,6 +127,13 @@ function App() {
   const [inputSource, setInputSource] = useState<InputSource>('draw');
   const isMnistSource = inputSource === 'mnist';
   const [useContrastNormalization, setUseContrastNormalization] = useState(true);
+
+  const sendMnistCommand = useCallback((index: number) => {
+    const commandText = `LoadSample(${index}) via ${isArduinoBackend ? 'arduino-bridge' : 'emulator'}`;
+    setLastMnistCommand(commandText);
+    console.info('[MNIST]', commandText);
+    mnistSend({ type: 'LoadSample', index });
+  }, [isArduinoBackend, mnistSend]);
 
   useEffect(() => {
     if (!connected) {
@@ -144,9 +153,6 @@ function App() {
   }, [arduinoBridgeWsUrl, backendKind, emulatorWsUrl]);
 
   useEffect(() => {
-    if (status?.endpoint_kind && status.endpoint_kind !== backendKind) {
-      setBackendKind(status.endpoint_kind);
-    }
     if (
       status?.endpoint_kind === 'serial_arduino' &&
       status.endpoint_address &&
@@ -154,7 +160,7 @@ function App() {
     ) {
       setArduinoPort(status.endpoint_address);
     }
-  }, [arduinoPort, backendKind, status?.endpoint_address, status?.endpoint_kind]);
+  }, [arduinoPort, status?.endpoint_address, status?.endpoint_kind]);
 
   // When MNIST sample is loaded via server, update pixels from frame data
   const handleLoadSample = useCallback(
@@ -231,17 +237,11 @@ function App() {
           send(frame?.running ? { type: 'Pause' } : { type: 'Play' });
           break;
         case 'ArrowRight':
-          emulatorSocket.send({
-            type: 'LoadSample',
-            index: (mnistStatus?.sample_index ?? 0) + 1,
-          });
+          sendMnistCommand((mnistStatus?.sample_index ?? 0) + 1);
           setInputSource('mnist');
           break;
         case 'ArrowLeft':
-          emulatorSocket.send({
-            type: 'LoadSample',
-            index: Math.max(0, (mnistStatus?.sample_index ?? 0) - 1),
-          });
+          sendMnistCommand(Math.max(0, (mnistStatus?.sample_index ?? 0) - 1));
           setInputSource('mnist');
           break;
         case 'Enter':
@@ -255,7 +255,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKey);
     return () => window.removeEventListener('keydown', handleKey);
-  }, [frame?.running, mnistStatus?.sample_index, send, sendToBoard, clear, emulatorSocket]);
+  }, [frame?.running, mnistStatus?.sample_index, send, sendToBoard, clear, sendMnistCommand]);
 
   return (
     <div className="flex flex-col h-screen" style={{ background: '#020617' }}>
@@ -404,7 +404,13 @@ function App() {
 
           {/* MNIST selector */}
           <MnistSelector
-            send={emulatorSocket.send}
+            send={(msg) => {
+              if (msg.type === 'LoadSample') {
+                sendMnistCommand(msg.index);
+                return;
+              }
+              mnistSend(msg);
+            }}
             currentIndex={mnistStatus?.sample_index ?? null}
             totalSamples={mnistStatus?.total_samples ?? 0}
             onLoadSample={handleLoadSample}
@@ -415,9 +421,18 @@ function App() {
               className="p-2.5 rounded-lg text-[10px]"
               style={{ background: '#3f2b12', border: '1px solid #78350f', color: '#fcd34d' }}
             >
-              Start emulator backend on localhost:3001 to use MNIST Prev/Next while in Arduino mode.
+              {isArduinoBackend
+                ? 'Connect to Arduino bridge websocket to use MNIST Prev/Next.'
+                : 'Start emulator backend on localhost:3001 to use MNIST Prev/Next.'}
             </div>
           ) : null}
+          <div
+            className="p-2.5 rounded-lg text-[10px]"
+            style={{ background: '#111827', border: '1px solid #334155', color: '#9ca3af' }}
+          >
+            ws={connected ? 'up' : 'down'} | backend={backendKind} | samples=
+            {mnistStatus?.sample_index ?? 'null'}/{mnistStatus?.total_samples ?? 0} | last={lastMnistCommand}
+          </div>
 
           {/* Simulation controls */}
           <div

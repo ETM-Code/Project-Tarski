@@ -32,17 +32,27 @@ export function useWebSocket(wsUrl: string): WebSocketState {
 
   useEffect(() => {
     let reconnectTimer: ReturnType<typeof setTimeout>;
+    let active = true;
 
     const connect = () => {
+      if (!active) {
+        return;
+      }
       try {
         const socket = new WebSocket(wsUrl);
 
         socket.onopen = () => {
+          if (!active) {
+            return;
+          }
           setConnected(true);
           socket.send(JSON.stringify({ type: 'GetBoardInfo' }));
         };
 
         socket.onclose = () => {
+          if (!active) {
+            return;
+          }
           setConnected(false);
           reconnectTimer = setTimeout(connect, 2000);
         };
@@ -52,6 +62,9 @@ export function useWebSocket(wsUrl: string): WebSocketState {
         };
 
         socket.onmessage = (event) => {
+          if (!active) {
+            return;
+          }
           try {
             const msg: ServerMessage = JSON.parse(event.data);
             switch (msg.type) {
@@ -85,13 +98,16 @@ export function useWebSocket(wsUrl: string): WebSocketState {
 
         ws.current = socket;
       } catch {
-        reconnectTimer = setTimeout(connect, 2000);
+        if (active) {
+          reconnectTimer = setTimeout(connect, 2000);
+        }
       }
     };
 
     connect();
 
     return () => {
+      active = false;
       clearTimeout(reconnectTimer);
       ws.current?.close();
     };

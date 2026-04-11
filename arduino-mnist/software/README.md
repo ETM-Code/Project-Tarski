@@ -141,6 +141,10 @@ Optional environment variables:
 - `ARDUINO_SERIAL_PORT` (default: `/dev/cu.usbserial-10`)
 - `ARDUINO_SERIAL_BAUD` (default: `9600`)
 - `ARDUINO_BRIDGE_PORT` (default: `3012`)
+- `ARDUINO_SAMPLE_DIR` (default: `./data`, used when `.bin` files exist)
+- `ARDUINO_MNIST_RAW_DIR` (default: `../data/MNIST/raw`, IDX fallback when no `.bin` files)
+
+When no `.bin` samples are found in `ARDUINO_SAMPLE_DIR`, the bridge automatically reads `t10k-images-idx3-ubyte` and `t10k-labels-idx1-ubyte` from `ARDUINO_MNIST_RAW_DIR` and downscales 28x28 -> 6x6 for MNIST navigation.
 
 ## Data Contract
 

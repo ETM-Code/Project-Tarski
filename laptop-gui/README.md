@@ -1,11 +1,12 @@
-# Tarski Laptop Interface (Python + TUI)
+# Tarski Laptop Interface (Python + TUI + Web UI)
 
-Host-side tools for talking to the T1 devboard over serial, running calibration, and doing inference from the terminal.
+Host-side tools for talking to the T1 devboard over serial, running calibration, and doing inference from the terminal or a browser-based drawing UI.
 
 This folder contains:
 
 - `tarski_board.py`: Python board client and CLI calibration/inference workflow
 - `tarski_tui.py`: Interactive Textual terminal UI built on top of `tarski_board.py`
+- `src/`: React + Vite drawing UI (`App.tsx`, `DrawingCanvas.tsx`, etc.)
 - `main.py`: Minimal placeholder entrypoint (currently prints a hello message)
 
 ## What This Interface Does
@@ -149,6 +150,33 @@ uv run python tarski_tui.py \
 ```
 
 This internally delegates to `tarski_board.py`.
+
+## Drawing UI (React + Vite)
+
+The browser UI in `src/` provides a drawing canvas, MNIST sample selector, pixel preview, prediction display, and serial monitor. It talks to two WebSocket backends:
+
+- Emulator: `ws://localhost:3001/ws` (MNIST Prev/Next and emulator inference)
+- Arduino bridge: `ws://localhost:3012/ws` (serial passthrough to the board; default port `/dev/cu.usbserial-10`)
+
+The canvas itself works without either backend running; inference and serial features require them.
+
+### Install and launch
+
+From this directory:
+
+```bash
+bun install    # first time only
+bun run dev
+```
+
+Open the printed localhost URL (Vite defaults to `http://localhost:5173`).
+
+Other scripts:
+
+```bash
+bun run build      # type-check and build for production
+bun run preview    # serve the production build locally
+```
 
 ## File Roles
 

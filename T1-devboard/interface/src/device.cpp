@@ -690,6 +690,154 @@ void Device::CalibL1(void)
     Serial.write(PORT_TRN_END);
 }
 
+void Device::CalibPulse(void)
+{
+    Serial.write(PORT_ACK);
+
+    // Read parameters
+    u8 dac_channel = 0;
+    u8 code_lo = 0, code_hi = 0;
+    u8 num_bursts = 0;
+    u8 meas_channel = 0;
+
+    if(!ReadU8(dac_channel) || !ReadU8(code_lo) || !ReadU8(code_hi) ||
+       !ReadU8(num_bursts) || !ReadU8(meas_channel))
+    {
+        _SendFailure();
+        return;
+    }
+
+    const u16 dac_code = static_cast<u16>(code_lo) | (static_cast<u16>(code_hi) << 8);
+
+    // Validate
+    if(dac_channel >= CONF_DAC_COUNT || meas_channel > 1 || num_bursts == 0 || num_bursts > 32)
+    {
+        _SendFailure();
+        return;
+    }
+
+    // Select measurement pin
+    const u8 meas_pin = (meas_channel == 0) ? PIN_L1_MEAS_OUT : PIN_L2_MEAS_OUT;
+
+    // Enable measurement path
+    if(meas_channel == 0)
+    {
+        digitalWrite(PIN_L1_EN_MEAS, HIGH);
+        digitalWrite(PIN_L2_EN_MEAS, LOW);
+    }
+    else
+    {
+        digitalWrite(PIN_L1_EN_MEAS, LOW);
+        digitalWrite(PIN_L2_EN_MEAS, HIGH);
+    }
+
+    // Enable ADC
+    _EnableADC();
+
+    // Save original ADC prescaler and switch to fast mode (prescaler 32).
+    // ATmega328P ADCSRA bits [2:0] = ADPS2:ADPS1:ADPS0
+    // Prescaler 32 = 101 → 500kHz ADC clock at 16MHz → ~26µs per conversion.
+    // Resolution degrades slightly above 200kHz but still gives ~8-9 effective bits,
+    // which is plenty for fitting an exponential decay.
+    const u8 adcsra_saved = ADCSRA;
+    ADCSRA = (ADCSRA & 0xF8) | _BV(ADPS2) | _BV(ADPS0); // prescaler 32
+
+    // Max samples per burst — must fit in stack. Each sample is 4 bytes (u16 time + u16 adc).
+    // 64 samples × 4 bytes = 256 bytes, comfortable for ATmega328P stack.
+    static constexpr u8 MAX_SAMPLES_PER_BURST = 64;
+    // Sample for ~1.5ms at ~26µs per conversion → ~58 samples.
+    // We cap at 64 to be safe.
+
+    u16 time_buf[MAX_SAMPLES_PER_BURST];
+    u16 adc_buf[MAX_SAMPLES_PER_BURST];
+
+    const u16 spike_threshold = 512; // ~2.5V on 10-bit scale
+
+    for(u8 burst = 0; burst < num_bursts; burst++)
+    {
+        // Zero all DACs and wait for membrane decay
+        for(usize i = 0; i < CONF_DAC_COUNT; i++) _dacs.data[i] = 0;
+        _WriteDACData(CONF_DAC_COUNT);
+        delay(10);
+
+        // Dummy ADC read to settle the mux
+        analogRead(meas_pin);
+
+        // Set target DAC to trigger spike
+        _dacs.data[dac_channel] = dac_code & ((1U << CONF_DAC_BITS) - 1U);
+        _WriteDACData(CONF_DAC_COUNT);
+
+        // Poll for spike onset (rising edge above threshold)
+        const unsigned long onset_start = micros();
+        const unsigned long onset_timeout = 50000UL; // 50ms max wait
+        bool spike_detected = false;
+
+        while((micros() - onset_start) < onset_timeout)
+        {
+            if(static_cast<u16>(analogRead(meas_pin)) > spike_threshold)
+            {
+                spike_detected = true;
+                break;
+            }
+        }
+
+        if(!spike_detected)
+        {
+            // No spike — send 0 samples for this burst
+            SendU8(0);
+            // Zero DAC
+            _dacs.data[dac_channel] = 0;
+            _WriteDACData(CONF_DAC_COUNT);
+            continue;
+        }
+
+        // Spike detected — now sample the decay curve as fast as possible.
+        // Record time relative to spike onset.
+        const unsigned long spike_time = micros();
+        u8 num_samples = 0;
+
+        for(u8 s = 0; s < MAX_SAMPLES_PER_BURST; s++)
+        {
+            const u16 adc_val = static_cast<u16>(analogRead(meas_pin));
+            const unsigned long now = micros();
+            const unsigned long raw_elapsed = now - spike_time;
+
+            // Guard against u16 overflow (~65ms). If the decay takes this
+            // long, something is wrong — stop sampling.
+            if(raw_elapsed > 10000UL) break; // 10ms max window
+
+            time_buf[s] = static_cast<u16>(raw_elapsed);
+            adc_buf[s] = adc_val;
+            num_samples++;
+
+            // Stop early if voltage has dropped well below any reasonable
+            // switch threshold (below ~0.5V = ADC ~102)
+            if(adc_val < 102) break;
+        }
+
+        // Zero DAC to reset neuron
+        _dacs.data[dac_channel] = 0;
+        _WriteDACData(CONF_DAC_COUNT);
+
+        // Send this burst's data: num_samples, then (time_us, adc_value) pairs
+        SendU8(num_samples);
+        for(u8 s = 0; s < num_samples; s++)
+        {
+            SendU16(time_buf[s]);
+            SendU16(adc_buf[s]);
+        }
+    }
+
+    // Restore ADC prescaler
+    ADCSRA = adcsra_saved;
+
+    // Disable measurement path
+    digitalWrite(PIN_L1_EN_MEAS, LOW);
+    digitalWrite(PIN_L2_EN_MEAS, LOW);
+
+    Serial.write(PORT_TRN_END);
+}
+
 void Device::ProgramDACAddress(void)
 {
     Serial.write(PORT_ACK);

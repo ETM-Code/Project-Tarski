@@ -158,6 +158,26 @@ namespace Device
     void CalibL1(void);
 
     /**
+     * Pulse duration calibration: fast ADC burst sampling of the pulse
+     * stretcher decay curve.
+     *
+     * Protocol: Host sends [dac_channel(u8), dac_code_lo(u8), dac_code_hi(u8),
+     *                        num_bursts(u8), meas_channel(u8)].
+     *
+     * For each burst:
+     *   1. Zeros all DACs, waits for membrane decay
+     *   2. Sets target DAC to trigger a hidden neuron spike
+     *   3. Polls MEAS_OUT for spike onset (rising edge)
+     *   4. Switches to fast ADC mode (prescaler 32) and samples the
+     *      exponential decay of the pulse stretcher output
+     *   5. Streams back: [num_samples(u8), then num_samples × (time_us_lo,
+     *      time_us_hi, adc_lo, adc_hi)] per burst, followed by TRN_END
+     *
+     * The host can then fit the decay curve to extract τ_pulse per neuron.
+     */
+    void CalibPulse(void);
+
+    /**
      * Program a MCP4728 DAC I2C address.
      *
      * All MCP4728s ship with factory address 0x60. To use multiple DACs on the

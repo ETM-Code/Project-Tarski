@@ -32,6 +32,7 @@ PORT_READ_MEAS = ord('M')
 PORT_SET_FLAG  = ord('F')
 PORT_UNSET_FLAG = ord('U')
 PORT_PROG_DAC  = ord('P')
+PORT_CALIB_PULSE = ord('B')
 
 # Hardware constants
 V_DD = 5.0
@@ -43,6 +44,20 @@ R_BOTTOM = 150e3
 
 THETA_0 = ((V_DD / R_TOP + 2.5 / R_BOTTOM) / (1/R_TOP + 1/R_BOTTOM)) - 2.5
 
+# Pulse stretcher (hidden neuron → synapse switch gate)
+R_STRETCH = 150e3       # 150kΩ
+C_STRETCH = 5.8e-9      # 5.8nF (PCB fix from 10pF)
+TAU_PULSE_NOMINAL = R_STRETCH * C_STRETCH   # ~870µs
+V_PEAK_NOMINAL = V_DD - 0.56   # ~4.44V after diode drop
+# SN74LVC1G3157 SPDT switch: CMOS thresholds at VCC=5V
+# V_IH = 0.7×VCC = 3.5V (guaranteed ON), V_IL = 0.3×VCC = 1.5V (guaranteed OFF)
+# Typical switching threshold ≈ 0.5×VCC = 2.5V
+V_SWITCH_NOMINAL = 2.5
+# Nominal duty cycle: t_on / dt where dt = 1ms
+import math as _math
+DUTY_NOMINAL = (TAU_PULSE_NOMINAL * 1e6
+                * _math.log(V_PEAK_NOMINAL / V_SWITCH_NOMINAL) / 1000.0)
+
 # DAC configuration
 # MCP4728 factory EEPROM default: VDD reference, gain=1
 # Firmware doesn't change EEPROM, so DAC outputs 0 to VDD
@@ -51,7 +66,7 @@ DAC_BITS = 12
 DAC_MAX_CODE = (1 << DAC_BITS) - 1
 NUM_DACS = 9        # 9 hidden neurons
 NUM_SYNAPSES = 90   # 9 hidden × 10 output
-BAUD_RATE = 9600
+BAUD_RATE = 115200  # Must match firmware Serial.begin(115200)
 
 
 class TarskiBoard:
@@ -262,6 +277,44 @@ class TarskiBoard:
         elapsed = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24)
         return None if elapsed == 0xFFFFFFFF else elapsed
 
+    def calib_pulse_burst(self, dac_channel: int, dac_code: int,
+                          num_bursts: int = 16, meas_channel: int = 0
+                          ) -> list[list[tuple[int, int]]] | None:
+        """Sample the pulse stretcher decay curve via fast ADC bursts.
+
+        Returns a list of bursts, each burst is a list of (time_us, adc_value)
+        tuples tracing the exponential decay after a hidden neuron spike.
+        Returns None if the firmware does not support this command.
+        """
+        self._send(bytes([PORT_CALIB_PULSE]))
+        if not self._expect_ack():
+            # Firmware doesn't support CalibPulse — drain the TRN_END that
+            # follows NAK in the unknown-command response.
+            try:
+                self._read(1)  # TRN_END
+            except TimeoutError:
+                pass
+            return None
+        self._send(bytes([
+            dac_channel,
+            dac_code & 0xFF, (dac_code >> 8) & 0xFF,
+            num_bursts,
+            meas_channel,
+        ]))
+
+        bursts = []
+        for _ in range(num_bursts):
+            num_samples = self._read(1)[0]
+            samples = []
+            for _ in range(num_samples):
+                data = self._read(4)  # time_us(u16) + adc(u16), little-endian
+                time_us = data[0] | (data[1] << 8)
+                adc_val = data[2] | (data[3] << 8)
+                samples.append((time_us, adc_val))
+            bursts.append(samples)
+        self._read(1)  # TRN_END
+        return bursts
+
     # ── High-level operations ──
 
     def fc1_to_dac_codes(self, fc1_outputs: list[float], dac_scale: float = 1.16) -> list[int]:
@@ -293,12 +346,43 @@ class TarskiBoard:
             return ((mag & 1) << 4) | ((mag & 2) << 4) | ((mag & 4) << 4)
         return 0
 
-    def load_checkpoint(self, checkpoint_path: str, dac_scale: float = 1.16):
-        """Load a gilgamesh checkpoint's fc2 weights into the board."""
+    def load_checkpoint(self, checkpoint_path: str, dac_scale: float = 1.16,
+                        calib: dict = None, duty_compensate: bool = True):
+        """Load a gilgamesh checkpoint's fc2 weights into the board.
+
+        If calib contains pulse_calibration data and duty_compensate is True,
+        adjusts fc2 float weights for per-neuron duty cycle variation before
+        re-quantizing to 3-bit.
+        """
         with open(checkpoint_path) as f:
             cp = json.load(f)
 
-        fc2_q = cp['quantized']['fc2_weight']
+        pulse_calib = (calib or {}).get('pulse_calibration')
+        if duty_compensate and pulse_calib and pulse_calib.get('per_neuron'):
+            # Adjust the already-quantized fc2 weights for duty cycle mismatch.
+            # We scale each hidden neuron's row by (nominal / actual) duty ratio
+            # and re-round to the [-7, +7] integer range. This preserves the
+            # original quantization scheme from gilgamesh.
+            fc2_q_orig = cp['quantized']['fc2_weight']
+            duties = self.compute_duty_cycles(pulse_calib)
+            nominal = pulse_calib.get('nominal_duty', DUTY_NOMINAL)
+            max_ratio = 2.0
+
+            fc2_q = []
+            for h in range(len(fc2_q_orig)):
+                duty = duties[h] if h < len(duties) else nominal
+                ratio = nominal / duty if duty > 0 else 1.0
+                ratio = max(1.0 / max_ratio, min(max_ratio, ratio))
+                row = []
+                for o in range(len(fc2_q_orig[h])):
+                    w = int(round(fc2_q_orig[h][o] * ratio))
+                    row.append(max(-7, min(7, w)))
+                fc2_q.append(row)
+            print(f"  Duty-compensated fc2 weights (duties: "
+                  f"{[f'{d:.3f}' for d in duties]})")
+        else:
+            fc2_q = cp['quantized']['fc2_weight']
+
         sr_bytes = []
         for h in range(9):
             for o in range(10):
@@ -555,6 +639,88 @@ class TarskiBoard:
                 'exc_plus_inh_spikes': both_count,
             }
 
+        print("\n=== Phase 5: Pulse Duration Calibration ===")
+        print("Measuring pulse stretcher decay per hidden neuron.\n")
+
+        calib['pulse_calibration'] = {
+            'per_neuron': [],
+            'nominal_tau_us': TAU_PULSE_NOMINAL * 1e6,
+            'nominal_duty': float(DUTY_NOMINAL),
+            'v_switch_v': V_SWITCH_NOMINAL,
+        }
+
+        # Use a strong DAC drive to reliably trigger spikes
+        pulse_dac_code = int(round(2.0 / DAC_VREF * DAC_MAX_CODE))
+
+        pulse_supported = True
+        for ch in active_channels:
+            print(f"  Channel {ch}: sampling {16} bursts...")
+            bursts = self.calib_pulse_burst(
+                dac_channel=ch, dac_code=pulse_dac_code,
+                num_bursts=16, meas_channel=0,
+            )
+
+            if bursts is None:
+                print("    Firmware does not support CalibPulse (PORT_CALIB_PULSE).")
+                print("    Using nominal pulse parameters for all neurons.")
+                pulse_supported = False
+                break
+
+            n_valid = sum(1 for b in bursts if len(b) > 0)
+            n_total_samples = sum(len(b) for b in bursts)
+            print(f"    {n_valid}/{len(bursts)} bursts with spike, "
+                  f"{n_total_samples} total samples")
+
+            fit = self._fit_pulse_decay(bursts)
+            t_on_us = (fit['tau_pulse_us']
+                       * np.log(fit['v_peak_v'] / V_SWITCH_NOMINAL)
+                       if fit['v_peak_v'] > V_SWITCH_NOMINAL else 0.0)
+            duty = t_on_us / 1000.0  # dt = 1ms
+
+            neuron_data = {
+                'channel': ch,
+                'tau_pulse_us': fit['tau_pulse_us'],
+                'v_peak_v': fit['v_peak_v'],
+                't_on_us': float(t_on_us),
+                'duty_cycle': float(min(duty, 1.0)),
+                'fit_quality': fit['fit_quality'],
+                'n_samples': fit['n_samples'],
+            }
+            calib['pulse_calibration']['per_neuron'].append(neuron_data)
+
+            print(f"    τ_pulse = {fit['tau_pulse_us']:.1f}µs, "
+                  f"V_peak = {fit['v_peak_v']:.2f}V, "
+                  f"t_on = {t_on_us:.1f}µs, "
+                  f"duty = {duty:.3f}, "
+                  f"R² = {fit['fit_quality']:.4f}")
+
+        # If firmware didn't support CalibPulse, fill in nominal values
+        if not pulse_supported:
+            for ch in active_channels:
+                calib['pulse_calibration']['per_neuron'].append({
+                    'channel': ch,
+                    'tau_pulse_us': TAU_PULSE_NOMINAL * 1e6,
+                    'v_peak_v': V_PEAK_NOMINAL,
+                    't_on_us': float(TAU_PULSE_NOMINAL * 1e6
+                                     * np.log(V_PEAK_NOMINAL / V_SWITCH_NOMINAL)),
+                    'duty_cycle': float(DUTY_NOMINAL),
+                    'fit_quality': 0.0,  # not measured
+                    'n_samples': 0,
+                })
+
+        # Compute duty cycles from calibration data
+        duties = self.compute_duty_cycles(calib['pulse_calibration'])
+        if duties:
+            calib['pulse_calibration']['measured_duties'] = duties
+            mean_duty = sum(duties) / len(duties)
+            calib['pulse_calibration']['mean_duty'] = float(mean_duty)
+            print(f"\n  Mean duty cycle: {mean_duty:.3f}")
+            print(f"  Per-neuron duties: {[f'{d:.3f}' for d in duties]}")
+        else:
+            calib['pulse_calibration']['measured_duties'] = []
+            calib['pulse_calibration']['mean_duty'] = float(
+                calib['pulse_calibration']['nominal_duty'])
+
         print("\n=== Calibration Complete ===")
         return calib
 
@@ -585,6 +751,161 @@ class TarskiBoard:
         # No spikes at all: use nominal
         return THETA_0 * R_SET_INPUT / R_LEAK
 
+    @staticmethod
+    def _fit_pulse_decay(bursts: list[list[tuple[int, int]]],
+                         adc_vref: float = 5.0, adc_max: int = 1023
+                         ) -> dict:
+        """Fit exponential decay V(t) = V_peak × exp(-t/τ) to ADC burst data.
+
+        Returns dict with tau_pulse_us, v_peak_v, and the fitted curve.
+        """
+        # Aggregate all samples across bursts, converting ADC to voltage.
+        # Each burst's time is relative to its own spike onset, so t values
+        # from different bursts overlap by design. This is correct for
+        # least-squares fitting: we're fitting V(t) = V_peak*exp(-t/τ)
+        # where each burst provides independent samples of the same curve.
+        all_t = []
+        all_v = []
+        for burst in bursts:
+            if not burst:
+                continue
+            for t_us, adc_val in burst:
+                v = adc_val / adc_max * adc_vref
+                all_t.append(t_us)
+                all_v.append(v)
+
+        if len(all_t) < 3:
+            return {
+                'tau_pulse_us': TAU_PULSE_NOMINAL * 1e6,
+                'v_peak_v': V_PEAK_NOMINAL,
+                'n_samples': len(all_t),
+                'fit_quality': 0.0,
+            }
+
+        t_arr = np.array(all_t, dtype=np.float64)
+        v_arr = np.array(all_v, dtype=np.float64)
+
+        # Filter out zero/negative voltage samples (can't take log)
+        mask = v_arr > 0.1
+        t_fit = t_arr[mask]
+        v_fit = v_arr[mask]
+
+        if len(t_fit) < 3:
+            return {
+                'tau_pulse_us': TAU_PULSE_NOMINAL * 1e6,
+                'v_peak_v': V_PEAK_NOMINAL,
+                'n_samples': len(t_fit),
+                'fit_quality': 0.0,
+            }
+
+        # Linear regression on ln(V) = ln(V_peak) - t/τ
+        ln_v = np.log(v_fit)
+        # Fit: ln_v = a + b*t  where b = -1/τ, a = ln(V_peak)
+        A = np.vstack([np.ones_like(t_fit), t_fit]).T
+        result = np.linalg.lstsq(A, ln_v, rcond=None)
+        coeffs = result[0]
+        a, b = coeffs[0], coeffs[1]
+
+        v_peak = np.exp(a)
+        tau_us = -1.0 / b if b < 0 else TAU_PULSE_NOMINAL * 1e6
+
+        # R² goodness of fit
+        ln_v_pred = a + b * t_fit
+        ss_res = np.sum((ln_v - ln_v_pred) ** 2)
+        ss_tot = np.sum((ln_v - np.mean(ln_v)) ** 2)
+        r_squared = 1.0 - ss_res / ss_tot if ss_tot > 0 else 0.0
+
+        return {
+            'tau_pulse_us': float(tau_us),
+            'v_peak_v': float(v_peak),
+            'n_samples': int(len(t_fit)),
+            'fit_quality': float(r_squared),
+        }
+
+    @staticmethod
+    def compute_duty_cycles(pulse_calib: dict,
+                            dt_us: float = 1000.0,
+                            v_switch: float = V_SWITCH_NOMINAL) -> list[float]:
+        """Compute per-neuron duty cycles from pulse calibration data.
+
+        duty = t_on / dt, where t_on = τ × ln(V_peak / V_switch).
+        """
+        duties = []
+        for neuron in pulse_calib.get('per_neuron', []):
+            tau = neuron['tau_pulse_us']
+            v_peak = neuron['v_peak_v']
+            if v_peak > v_switch and tau > 0:
+                t_on = tau * np.log(v_peak / v_switch)
+                duties.append(min(float(t_on / dt_us), 1.0))
+            else:
+                # Fallback: nominal
+                t_on_nom = TAU_PULSE_NOMINAL * 1e6 * np.log(V_PEAK_NOMINAL / v_switch)
+                duties.append(float(t_on_nom / dt_us))
+        return duties
+
+    @staticmethod
+    def adjust_fc2_for_duty(fc2_weights: list[list[float]],
+                            duty_cycles: list[float],
+                            nominal_duty: float = None,
+                            max_ratio: float = 2.0) -> list[list[float]]:
+        """Scale fc2 float weights to compensate for per-neuron duty variation.
+
+        Each hidden neuron h delivers current for duty[h] fraction of the
+        timestep. We scale its outgoing fc2 weights by (nominal / actual)
+        so that the total charge delivered matches what the network expects.
+
+        Args:
+            fc2_weights: [9][10] float weight matrix (pre-quantization)
+            duty_cycles: per-hidden-neuron duty cycles (length 9)
+            nominal_duty: reference duty cycle. If None, uses the physical
+                nominal (DUTY_NOMINAL from component values), not the mean
+                of measured values.
+            max_ratio: maximum allowed compensation ratio per neuron. Clamped
+                to avoid extreme scaling that would be destroyed by quantization.
+
+        Returns:
+            Adjusted [9][10] float weight matrix.
+        """
+        if nominal_duty is None:
+            nominal_duty = DUTY_NOMINAL
+
+        adjusted = []
+        for h in range(len(fc2_weights)):
+            row = []
+            duty = duty_cycles[h] if h < len(duty_cycles) else nominal_duty
+            ratio = nominal_duty / duty if duty > 0 else 1.0
+            # Clamp ratio to avoid extreme compensation that quantization
+            # would destroy anyway (3-bit weights have ~14% resolution)
+            ratio = max(1.0 / max_ratio, min(max_ratio, ratio))
+            for o in range(len(fc2_weights[h])):
+                row.append(fc2_weights[h][o] * ratio)
+            adjusted.append(row)
+        return adjusted
+
+    @staticmethod
+    def quantize_fc2(fc2_float: list[list[float]], bits: int = 3) -> list[list[int]]:
+        """Quantize fc2 float weights to integer range [-(2^bits-1), +(2^bits-1)].
+
+        For 3-bit: [-7, +7].
+        """
+        max_val = (1 << bits) - 1  # 7 for 3-bit
+        # Find the scale: map the max absolute value to max_val
+        flat = [w for row in fc2_float for w in row]
+        abs_max = max(abs(w) for w in flat) if flat else 1.0
+        if abs_max == 0:
+            abs_max = 1.0
+        scale = max_val / abs_max
+
+        quantized = []
+        for row in fc2_float:
+            q_row = []
+            for w in row:
+                q = int(round(w * scale))
+                q = max(-max_val, min(max_val, q))
+                q_row.append(q)
+            quantized.append(q_row)
+        return quantized
+
 
 def main():
     parser = argparse.ArgumentParser(description='Tarski board interface')
@@ -594,8 +915,12 @@ def main():
     parser.add_argument('--dac-scale', type=float, default=1.16)
     parser.add_argument('--setup-dacs', action='store_true',
                         help='Program MCP4728 I2C addresses (requires jumper isolation)')
-    parser.add_argument('--calibrate', action='store_true', help='Run L1 calibration')
+    parser.add_argument('--calibrate', action='store_true', help='Run full calibration (incl. pulse duration)')
     parser.add_argument('--infer', action='store_true', help='Run inference on MNIST samples')
+    parser.add_argument('--no-duty-compensate', action='store_true',
+                        help='Disable fc2 weight adjustment for pulse duty cycle')
+    parser.add_argument('--export-duty-json', type=str, default=None,
+                        help='Export per-neuron duty cycles to JSON for hw-aware training in gilgamesh')
     parser.add_argument('--data-dir', default='../gilgamesh/data', help='MNIST data directory')
     parser.add_argument('--samples', type=int, default=10, help='Number of samples to infer')
     args = parser.parse_args()
@@ -642,6 +967,29 @@ def main():
             print("\nCalibration saved to calibration_results.json")
             print(f"Per-channel DAC scales: {[f'{s:.4f}' for s in calib['dac_scales']]}")
 
+            pulse_calib = calib.get('pulse_calibration', {})
+            if pulse_calib.get('per_neuron'):
+                duties = TarskiBoard.compute_duty_cycles(pulse_calib)
+                print(f"Per-neuron duty cycles: {[f'{d:.3f}' for d in duties]}")
+
+            # Export duty cycles for gilgamesh hw-aware training if requested
+            export_path = args.export_duty_json
+            if export_path and pulse_calib.get('per_neuron'):
+                duty_export = {
+                    'per_neuron_duty_cycles': duties,
+                    'per_neuron_tau_pulse_us': [
+                        n['tau_pulse_us'] for n in pulse_calib['per_neuron']],
+                    'per_neuron_v_peak_v': [
+                        n['v_peak_v'] for n in pulse_calib['per_neuron']],
+                    'v_switch_v': pulse_calib['v_switch_v'],
+                    'nominal_duty': pulse_calib['nominal_duty'],
+                    'mean_duty': pulse_calib.get('mean_duty',
+                                                 pulse_calib['nominal_duty']),
+                }
+                with open(export_path, 'w') as f:
+                    json.dump(duty_export, f, indent=2)
+                print(f"Duty cycle data exported to {export_path}")
+
         if args.infer and args.checkpoint:
             # Load calibration if available
             calib = None
@@ -654,7 +1002,13 @@ def main():
                 print("Run --calibrate first for best accuracy.")
 
             print(f"Loading checkpoint: {args.checkpoint}")
-            cp = board.load_checkpoint(args.checkpoint, args.dac_scale)
+            duty_comp = not args.no_duty_compensate
+            cp = board.load_checkpoint(args.checkpoint, args.dac_scale,
+                                       calib=calib, duty_compensate=duty_comp)
+            if duty_comp and calib and calib.get('pulse_calibration', {}).get('per_neuron'):
+                print("  (fc2 weights adjusted for pulse duty cycle)")
+            elif not duty_comp:
+                print("  (duty compensation disabled via --no-duty-compensate)")
 
             # Load fc1 weights
             fc1_w = np.array(cp['weights']['fc1_weight'], dtype=np.float32)

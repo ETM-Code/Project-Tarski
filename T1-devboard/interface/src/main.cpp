@@ -62,6 +62,10 @@ void loop()
             Device::CalibL1();
             break;
 
+        case PORT_CALIB_PULSE:                  // Pulse duration: fast ADC burst
+            Device::CalibPulse();
+            break;
+
         case PORT_PROG_DAC:                     // Program MCP4728 I2C address
             Device::ProgramDACAddress();
             break;

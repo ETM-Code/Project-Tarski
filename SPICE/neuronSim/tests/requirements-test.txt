@@ -1,0 +1,11 @@
+# Test-only dependencies for the spice-python (neuronSim) characterization suite.
+# Install + run, e.g.:
+#   uv venv --python 3.11 .venv-tests
+#   uv pip install --python .venv-tests/bin/python -r tests/requirements-test.txt
+#   .venv-tests/bin/python -m pytest
+#
+# The suite is hermetic: only pytest + numpy are required. pandas/matplotlib are
+# optional (the generator modules import them lazily); the power-stats tests pin
+# the module-level numpy themselves so they pass with or without pandas present.
+pytest>=8
+numpy==2.3.5

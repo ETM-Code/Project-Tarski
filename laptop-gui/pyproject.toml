@@ -9,3 +9,8 @@ dependencies = [
     "pyserial>=3.5",
     "textual>=8.2.1",
 ]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]

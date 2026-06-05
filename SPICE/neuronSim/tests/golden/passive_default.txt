@@ -1,0 +1,33 @@
+* ---------- lif_passive PASSIVE neuron subcircuit (no op-amps) ----------
+.subckt lif_passive_passive mem vref vdd comp_pulse sum
+* Sum node connection (passive: sum connects directly to membrane)
+Rsum sum mem 1
+
+* Passive RC membrane (no op-amp)
+* tau_m = 1.2e+05 * 1e-08 = 1.200 ms
+Cmem mem 0 1e-08
+Rleak mem vref 120000.0
+
+* Fixed-threshold comparator (sharp transition)
+* Threshold: 3.300V (0.800V above Vref)
+
+.param VLO=0.0 VHI=5.0
+.param VTH=3.3
+.param VSW=0.010
+Bcomp comp_raw 0 V = VLO + (VHI - VLO) * (0.5 * (1 + tanh((V(mem) - VTH) / VSW)))
+Rcomp comp_raw comp_out 1000
+Ccomp comp_out 0 50p
+
+* Pulse stretching circuit (tau_pulse = 1.67 ms)
+.model DPW D(Is=1e-12 N=1.05 Rs=10 Cjo=1p)
+Dpw comp_out comp_pulse DPW
+Rpw comp_pulse 0 1.67e+04
+Cpw comp_pulse 0 1e-07
+
+* Reset path (pulls membrane to Vref on spike)
+* Switch controlled by comp_pulse (stretched) for stable reset
+Rreset mem reset_node 200.0
+Sreset reset_node vref comp_pulse 0 SWRESET
+.model SWRESET SW(Ron=10.0 Roff=1000000000.0 Vt=2.5 Vh=0.1)
+
+.ends

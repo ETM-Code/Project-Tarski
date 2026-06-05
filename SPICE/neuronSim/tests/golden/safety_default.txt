@@ -1,0 +1,7 @@
+== Sanity & math checks ==
+Membrane tau (Rleak*C): 1.20 ms
+Comparator nominal Vth: 3.300 V (hyst ±0.025 V)
+syn1: A_eff≈0.950 V, Rpar≈25.88 kΩ, τ≈0.259 ms, V∞≈0.745 V, ΔV(0.4 ms)≈0.586 V
+syn2: A_eff≈0.950 V, Rpar≈42.58 kΩ, τ≈0.426 ms, V∞≈0.613 V, ΔV(0.7 ms)≈0.480 V
+syn3: A_eff≈2.950 V, Rpar≈69.47 kΩ, τ≈0.695 ms, V∞≈1.242 V, ΔV(0.6 ms)≈0.718 V
+Reset path: I≈4.76 mA/V. With 1 V delta, 4.76 mA flows.

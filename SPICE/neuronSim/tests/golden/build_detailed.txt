@@ -1,0 +1,79 @@
+* lif_demo_network [DETAILED]
+
+VDD vdd 0 5.0
+VREF vref 0 2.5
+.options method=gear maxord=2 reltol=2e-3 trtol=7
+* ---------- demo_neuron DETAILED neuron subcircuit ----------
+.subckt demo_neuron_detailed mem vref vdd comp_out analog_out sum
+* Vref buffer (OPA604-like)
+Ebuf vref_buf 0 vref 0 1e5
+Rbuf vref_buf vref 1k
+Cbuf vref 0 80p
+Rvr  vref vref_buf 1m
+* TIA op-amp with finite gain and compensation
+Eint mem 0 sum vref 2e5
+Rout_int mem 0 20
+Cint mem 0 5p
+Cmem  mem sum 1e-08
+Rleak mem sum 120000.0
+Iint_bias vdd 0 2e-05
+* Divider to place threshold near Vref + over_vref_V
+Rvh  vdd     vth_node 3.4e+06
+Rvl  vth_node vref    1.58e+06
+Rf   comp_out vth_node 1.07e+08
+Cadapt vth_node vref 2.2e-08
+.model DADAPT D(Is=1e-6 N=1.05 Rs=2 Cjo=1p Eg=0.69)
+Rinj  comp_out ninj 2.2Meg
+Dinj  ninj vth_node DADAPT
+.param VLO=0.0 VHI=5.0
+.param VSW=0.01
+Bdef vdef 0 V = V(mem) - V(vref)
+Btheta_rel vtheta_rel 0 V = V(vth_node) - V(vref)
+* Soft comparator: fires when V(mem) > V(vref) + over_vref_V (align with Rust model)
+Bcomp comp_raw 0 V = VLO + (VHI - VLO)*(0.5*(1 + tanh( ( V(vdef) - ( 0.8 + 0.003 ) ) / VSW )))
+Rcout comp_raw comp_out 10.0
+Ccout comp_out 0 4e-09
+Icomp_bias vdd 0 2e-06
+Rreset mem reset_node 200.0
+Coff_reset reset_node vref 7e-12
+Sreset reset_node vref comp_out 0 SWMUX
+.model SWMUX SW(Ron=10.0 Roff=1000000000.0 Vt=2.5 Vh=0.1)
+* Analog output stage
+Bdiff ana_in 0 V = V(mem) - V(vref)
+* Inverting amplifier op-amp (OPA-like)
+Eana_opamp ana_opamp_out 0 0 ana_inv_in 1e5
+Rana_int ana_opamp_out analog_out 50
+Cana_comp analog_out 0 2p
+R1_ana ana_in ana_inv_in 1e+04
+R2_ana analog_out ana_inv_in 2e+04
+Rana_load analog_out 0 10000.0
+Iana_bias vdd 0 1e-05
+.ends
+
+XNEU mem vref vdd comp ana sum demo_neuron_detailed
+Ra_out   ana n_outmix 100
+Diso     comp n_outmix D_SCHOTTKY
+Rload    n_outmix 0 10k
+.model   D_SCHOTTKY D(Is=1e-6 N=1.05 Rs=2 Cjo=2p Vj=0.3 M=0.3 Eg=0.69)
+Vsrc_syn1 n_syn1 vref PWL(0.0 0.0 0.005 0.0 0.005001 1.2 0.005399 1.2 0.0054 0.0)
+
+R_syn1 n_syn1 sum 33000.0
+Vsrc_syn2 n_syn2 vref PWL(0.0 0.0 0.0115 0.0 0.011501 1.2 0.011849 1.2 0.01185 0.0 0.017 0.0 0.017001 1.2 0.017349 1.2 0.01735 0.0 0.022 0.0 0.022001 1.2 0.022649 1.2 0.02265 0.0)
+
+R_syn2 n_syn2 sum 66000.0
+Vsrc_syn3 n_syn3 vref PWL(0.0 0.0 0.026 0.0 0.026001 1.2 0.026599 1.2 0.0266 0.0 0.034 0.0 0.034001 1.2 0.034599 1.2 0.0346 0.0 0.039 0.0 0.039001 3.2 0.039199 3.2 0.0392 0.0)
+
+R_syn3 n_syn3 sum 165000.0
+
+.control
+  set filetype=ascii
+  set wr_singlescale
+  set wr_vecnames
+  * Force uniform output grid and small files
+  tran 1e-06 0.05 0 1e-06
+  linearize
+  wrdata /FIXED/out.csv time v(vref) v(mem) v(comp) v(ana) v(n_outmix) v(sum) v(n_syn1) i(Vsrc_syn1) v(n_syn2) i(Vsrc_syn2) v(n_syn3) i(Vsrc_syn3) i(VDD) i(VREF)
+  quit
+.endc
+
+.end

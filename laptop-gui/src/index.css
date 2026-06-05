@@ -39,5 +39,5 @@ body {
 ::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
 
 /* Canvas tooling */
-.drawing-canvas { tooling: crosshair; }
-.drawing-canvas:active { tooling: crosshair; }
+.drawing-canvas { cursor: crosshair; }
+.drawing-canvas:active { cursor: crosshair; }

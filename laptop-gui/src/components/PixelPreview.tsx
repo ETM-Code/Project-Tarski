@@ -22,7 +22,7 @@ export function PixelPreview({
   return (
     <div
       className="flex flex-col items-center gap-1"
-      style={{ tooling: onClick ? 'pointer' : 'default' }}
+      style={{ cursor: onClick ? 'pointer' : 'default' }}
       onClick={onClick}
     >
       <svg

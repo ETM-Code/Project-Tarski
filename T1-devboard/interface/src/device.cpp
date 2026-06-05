@@ -34,6 +34,42 @@ namespace Device
     static u16 _dac_data[CONF_DAC_COUNT];
     static View<u16> _dacs = { CONF_DAC_COUNT, _dac_data };
 
+    // Per-channel quiescent state.
+    //   ch 0..8  → 9 PNP current-mirror inputs for the 9 hidden neurons.
+    //              "Off" = DAC at maximum code (~V_DD), which reverse-
+    //              biases the mirror so no current flows into the
+    //              membrane.
+    //   ch 9     → DAC#3 VOUTB / V_SET2_1 — unused/reserved. Idle at 0 V.
+    //   ch 10    → DAC#3 VOUTC / V_OUT3 — the direct "synapse spike rail"
+    //              that forces hidden neurons Neuron6..Neuron9 into a
+    //              stretched-spike state via D1806..D1809. Must sit at
+    //              0 V when idle, otherwise every measurement baseline
+    //              sees four permanently-driven spike sources.
+    //   ch 11    → DAC#3 VOUTD — marked no-connect in the netlist. Idle
+    //              at 0 V for determinism.
+    //
+    // Everything that isn't a mirror therefore sits at 0 V at rest.
+    static const u16 DAC_CH_QUIESCENT[CONF_DAC_COUNT] = {
+        static_cast<u16>((1U << CONF_DAC_BITS) - 1U),  // ch 0  mirror
+        static_cast<u16>((1U << CONF_DAC_BITS) - 1U),  // ch 1  mirror
+        static_cast<u16>((1U << CONF_DAC_BITS) - 1U),  // ch 2  mirror
+        static_cast<u16>((1U << CONF_DAC_BITS) - 1U),  // ch 3  mirror
+        static_cast<u16>((1U << CONF_DAC_BITS) - 1U),  // ch 4  mirror
+        static_cast<u16>((1U << CONF_DAC_BITS) - 1U),  // ch 5  mirror
+        static_cast<u16>((1U << CONF_DAC_BITS) - 1U),  // ch 6  mirror
+        static_cast<u16>((1U << CONF_DAC_BITS) - 1U),  // ch 7  mirror
+        static_cast<u16>((1U << CONF_DAC_BITS) - 1U),  // ch 8  mirror
+        0,                                             // ch 9  V_SET2_1 (unused → 0 V)
+        0,                                             // ch 10 V_OUT3   (synapse rail → 0 V)
+        0,                                             // ch 11 no-connect (→ 0 V)
+    };
+
+    static void _SetDacsQuiescent(void)
+    {
+        for(usize i = 0; i < CONF_DAC_COUNT; i++)
+            _dacs.data[i] = DAC_CH_QUIESCENT[i];
+    }
+
     ISR(WDT_vect) { _wdt_elapsed = true; }
 
     static u8 _WDTFromTimeout(Timeout timeout)
@@ -462,6 +498,13 @@ void Device::ReadMeasurement(void)
         return;
     }
 
+    // The ADC is disabled at Init() to save power. `ReadMeasurement`
+    // used to assume the caller had turned it back on via PORT_SET_FLAG
+    // (_FLAG_ADC_ENABLE), but no host code path actually does that —
+    // every previous L2 probe returned ADC=0. Enable it locally for
+    // the duration of the read and disable on exit.
+    _EnableADC();
+
     if(measurement_source == _MEAS_SOURCE_L1)
     {
         digitalWrite(PIN_L1_EN_MEAS, HIGH);
@@ -478,12 +521,14 @@ void Device::ReadMeasurement(void)
     }
     else
     {
+        _DisableADC();
         _SendFailure();
         return;
     }
 
     digitalWrite(PIN_L1_EN_MEAS, LOW);
     digitalWrite(PIN_L2_EN_MEAS, LOW);
+    _DisableADC();
 
     const u16 measurement = (measurement_source == _MEAS_SOURCE_L1) ? _L1_meas : _L2_meas;
     SendU16(measurement);
@@ -646,8 +691,10 @@ void Device::CalibL1(void)
         digitalWrite(PIN_L2_EN_MEAS, HIGH);
     }
 
-    // Zero all DACs first (let neuron membrane reset)
-    for(usize i = 0; i < CONF_DAC_COUNT; i++) _dacs.data[i] = 0;
+    // Quiescent all DACs first so no hidden neurons are driven, and ch
+    // 10 (V_OUT3 synapse rail) is at 0 V — otherwise it force-spikes
+    // Neuron6..9 through D1806..D1809.
+    _SetDacsQuiescent();
     _WriteDACData(CONF_DAC_COUNT);
     delay(10); // Wait for membrane to decay to resting potential
 
@@ -663,7 +710,15 @@ void Device::CalibL1(void)
     // Use analogRead with a threshold: neuron comparator output
     // swings from ~0V (no spike) to ~4.5V (spike). ADC returns 0-1023.
     // Threshold at ~2.5V = ADC value ~512.
-    const u16 spike_threshold = 512;
+    // Lowered from 512 (~2.5 V @ 5 V ref) to 200 (~0.98 V). Empirically,
+    // the wired-OR MEAS_OUT bus on this reworked board tops out around
+    // ADC 470 (~2.3 V) during drive — never reaches 512 — because the
+    // 2N7002 switch Rons and R_stretch pull-downs combine to cap the bus
+    // below the nominal ~4 V stretched V_out swing. 200 is comfortably
+    // above the idle baseline (0..10) and well below the observed 270+
+    // drive level, so we count actual activity rather than missing
+    // everything.
+    const u16 spike_threshold = 200;
 
     while((micros() - start_us) < timeout_us)
     {
@@ -674,8 +729,9 @@ void Device::CalibL1(void)
         }
     }
 
-    // Zero the DAC to reset neuron
-    _dacs.data[dac_channel] = 0;
+    // Return every DAC to its per-channel quiescent state (ch 10 back
+    // to 0 V is the crucial one — it's how we stop forcing H6..H9).
+    _SetDacsQuiescent();
     _WriteDACData(CONF_DAC_COUNT);
 
     // Disable measurement path
@@ -845,16 +901,33 @@ void Device::ProgramDACAddress(void)
     // Read old and new addresses from host
     u8 old_addr = 0;
     u8 new_addr = 0;
-    if(!ReadU8(old_addr) || !ReadU8(new_addr))
+    if(!ReadU8(old_addr))
     {
-        _SendFailure();
+        // Diagnostic: NAK + 0xA1 + TRN_END means ReadU8(old_addr) timed out.
+        Serial.write(PORT_NAK);
+        SendU8(0xA1);
+        Serial.write(PORT_TRN_END);
+        return;
+    }
+    if(!ReadU8(new_addr))
+    {
+        // Diagnostic: NAK + 0xA2 + TRN_END means ReadU8(new_addr) timed out.
+        Serial.write(PORT_NAK);
+        SendU8(0xA2);
+        Serial.write(PORT_TRN_END);
         return;
     }
 
     // Validate addresses (MCP4728 uses 0x60-0x67, 7-bit)
     if(old_addr < 0x60 || old_addr > 0x67 || new_addr < 0x60 || new_addr > 0x67)
     {
-        _SendFailure();
+        // Diagnostic: NAK + 0xA3 + old + new + TRN_END
+        // means ReadU8 succeeded but the bytes weren't valid addresses.
+        Serial.write(PORT_NAK);
+        SendU8(0xA3);
+        SendU8(old_addr);
+        SendU8(new_addr);
+        Serial.write(PORT_TRN_END);
         return;
     }
 
@@ -870,9 +943,9 @@ void Device::ProgramDACAddress(void)
     //   3. Send current address byte (write): [1100_A2A1A0_0]
     //   4. Wait for ACK
     //   5. Send command byte 1: [0110_0001] | (old_bits << 2)
-    //   6. Wait for ACK
-    //   7. Send command byte 2: [0110_0010] | (new_bits << 2)
-    //   8. After 8th SCL clock of byte 2, pull LDAC LOW before 9th clock (ACK)
+    //   6. After 8th SCL clock of byte 1, pull LDAC LOW before 9th clock (ACK)
+    //   7. Wait for ACK
+    //   8. Send command byte 2: [0110_0010] | (new_bits << 2) (LDAC stays LOW)
     //   9. Wait for ACK
     //   10. Send command byte 3: [0110_0011] | (new_bits << 2)
     //   11. Wait for ACK
@@ -953,13 +1026,19 @@ void Device::ProgramDACAddress(void)
     u8 addr_byte = (old_addr << 1) & 0xFE; // 7-bit address + write bit
     bool ack1 = i2c_byte(addr_byte);
 
-    // 4. Command byte 1: current address bits
+    // 4. Command byte 1 WITH LDAC toggle: current address bits.
+    //    Per the MCP4728 address-write sequence, LDAC must transition
+    //    HIGH->LOW during the negative SCL edge of the 8th bit of the
+    //    SECOND byte (== cmd1). The previous version of this firmware put
+    //    the LDAC toggle on cmd2, which is off by one — the device NAKs
+    //    cmd2 when the LDAC timing on cmd1 was wrong, so address
+    //    programming silently failed.
     u8 cmd1 = 0x61 | (old_bits << 2);
-    bool ack2 = i2c_byte(cmd1);
+    bool ack2 = i2c_byte_with_ldac(cmd1);
 
-    // 5. Command byte 2 WITH LDAC toggle: new address bits
+    // 5. Command byte 2: new address bits. LDAC stays LOW throughout.
     u8 cmd2 = 0x62 | (new_bits << 2);
-    bool ack3 = i2c_byte_with_ldac(cmd2);
+    bool ack3 = i2c_byte(cmd2);
 
     // 6. Command byte 3: confirm new address
     u8 cmd3 = 0x63 | (new_bits << 2);
@@ -979,7 +1058,7 @@ void Device::ProgramDACAddress(void)
     // Re-enable Wire library
     Wire.begin();
 
-    delay(50); // EEPROM write time
+    delay(100); // EEPROM write time (matches jknipper/mcp4728_program_address reference)
 
     // Verify: try to communicate with the new address
     Wire.beginTransmission(new_addr);
@@ -1015,15 +1094,26 @@ void Device::ProgramDACAddress(void)
     Wire.beginTransmission(old_addr);
     bool still_at_old = (Wire.endTransmission() == 0);
 
-    // Report detailed status: byte 1 = result code
-    //   0x01 = success (verified at new address)
-    //   0x02 = failed, device still at old address
-    //   0x03 = failed, device not responding at either address
-    //   0x04 = partial ACK failure (I2C framing issue)
-    u8 status = still_at_old ? 0x02 : 0x03;
-    if(!ack1 || !ack2 || !ack3 || !ack4) status = 0x04;
+    // Report detailed status: byte 1 = result code.
+    // NOTE: do not use 0x04 here — it collides with PORT_TRN_END and the
+    // host's stream parser would mistake it for end-of-frame.
+    //   0x12 = failed, device still at old address (LDAC timing)
+    //   0x13 = failed, device not responding at either address
+    //   0x14 = partial ACK failure during the bit-bang (I2C framing)
+    u8 status = still_at_old ? 0x12 : 0x13;
+    if(!ack1 || !ack2 || !ack3 || !ack4) status = 0x14;
+
+    // Diagnostic: append the four ack bits packed into one byte so we can
+    // see exactly which step of the bit-bang failed without another reflash.
+    //   bit0 = ack1 (address byte), bit1 = ack2 (cmd1),
+    //   bit2 = ack3 (cmd2 with LDAC), bit3 = ack4 (cmd3)
+    u8 ack_bits = (ack1 ? 0x01 : 0)
+                | (ack2 ? 0x02 : 0)
+                | (ack3 ? 0x04 : 0)
+                | (ack4 ? 0x08 : 0);
 
     Serial.write(PORT_NAK);
     SendU8(status);
+    SendU8(ack_bits);
     Serial.write(PORT_TRN_END);
 }

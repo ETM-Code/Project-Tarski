@@ -9,7 +9,7 @@ DETAIL: adds Vref buffer, finite op-amp gain/pole, physical hysteresis network,
 This file builds the NEURON subckts. The network (spikes/synapses) is in lif_network_generator.py.
 """
 from __future__ import annotations
-import json, argparse, os, textwrap
+import json, argparse, os
 from dataclasses import dataclass, field
 
 # -------------------- Config dataclasses --------------------
@@ -148,6 +148,13 @@ def lif_sanity_checks(cfg: NeuronConfig) -> list[str]:
 def _header(title: str) -> str:
     return f"* ---------- {title} ----------\n"
 
+def _analog_diff_input(cfg: NeuronConfig) -> str:
+    """Differential input line for the analog stage: V(mem)-V(vref) for sign>=0,
+    else V(vref)-V(mem)."""
+    if cfg.analog_out.sign >= 0:
+        return "Bdiff ana_in 0 V = V(mem) - V(vref)\n"
+    return "Bdiff ana_in 0 V = V(vref) - V(mem)\n"
+
 # -------------------- FAST subcircuit --------------------
 
 def generate_fast_neuron(cfg: NeuronConfig) -> str:
@@ -265,13 +272,10 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
         desired_gain = abs(cfg.analog_out.gain)
         R1 = cfg.analog_out.R1_ohm
         R2 = R1 * desired_gain  # gain magnitude = R2/R1
-        
+
         # Differential input stage: create Vin = (Vmem - Vref) or (Vref - Vmem)
-        if cfg.analog_out.sign >= 0:
-            s.append("Bdiff ana_in 0 V = V(mem) - V(vref)\n")
-        else:
-            s.append("Bdiff ana_in 0 V = V(vref) - V(mem)\n")
-        
+        s.append(_analog_diff_input(cfg))
+
         # Inverting amplifier with finite gain op-amp model
         # Op-amp: high gain, finite bandwidth
         s.append("* Inverting amplifier op-amp (OPA-like)\n")
@@ -292,13 +296,10 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
         desired_gain = abs(cfg.analog_out.gain)
         R1 = cfg.analog_out.R1_ohm
         R2 = R1 * max(desired_gain - 1.0, 0.0)  # gain = 1 + R2/R1
-        
+
         # Differential input stage: create Vin = (Vmem - Vref) or (Vref - Vmem)
-        if cfg.analog_out.sign >= 0:
-            s.append("Bdiff ana_in 0 V = V(mem) - V(vref)\n")
-        else:
-            s.append("Bdiff ana_in 0 V = V(vref) - V(mem)\n")
-        
+        s.append(_analog_diff_input(cfg))
+
         # Non-inverting amplifier with finite gain op-amp model
         s.append("* Non-inverting amplifier op-amp (OPA-like)\n")
         s.append("Eana_opamp ana_opamp_out 0 ana_in ana_fb 1e5\n")

@@ -9,9 +9,10 @@ Usage:
 
 import argparse
 import json
-import struct
 import sys
 import time
+from itertools import combinations
+
 import numpy as np
 
 try:
@@ -181,6 +182,46 @@ def extract_output_spikes(word: int) -> list[int]:
     """
     return [1 - ((word >> OUTPUT_BIT_MAP[i]) & 1) for i in range(10)]
 
+
+# Channel 10 is the synapse V_OUT3 rail. Driving it HIGH (DAC_MAX_CODE)
+# simulates every hidden neuron firing at once — see sample_with_synapse_pulse.
+CH10_CHANNEL = 10
+
+
+def ch10_drive_codes(code: int = DAC_MAX_CODE) -> list[int]:
+    """Quiescent DAC codes with channel 10 (the synapse V_OUT3 rail) asserted
+    at `code`. This is the standard "drive the synapse rail" stimulus pattern."""
+    codes = list(DAC_QUIESCENT_CODES)
+    codes[CH10_CHANNEL] = code
+    return codes
+
+
+def fire_glyphs(flags) -> str:
+    """Render a sequence of truthy/falsy fire flags as ●/· glyphs."""
+    return ''.join('●' if x else '·' for x in flags)
+
+
+def adc_to_volts(raw: int) -> float:
+    """Convert a raw 10-bit ADC reading to volts against the 5 V reference."""
+    return raw * 5.0 / 1023
+
+
+def count_observable_fires(snapshots, output: int) -> int:
+    """Count snapshots in which `output`'s latch was captured in the SPIKED
+    state, decoding each raw spike word via extract_output_spikes."""
+    return sum(1 for w in snapshots if extract_output_spikes(w)[output])
+
+
+def accumulate_spike_counts(snapshots) -> list[int]:
+    """Sum per-output spike flags across `snapshots` into a 10-element list."""
+    counts = [0] * 10
+    for word in snapshots:
+        bits = extract_output_spikes(word)
+        for i in range(10):
+            counts[i] += bits[i]
+    return counts
+
+
 BAUD_RATE = 115200  # Must match firmware Serial.begin(115200)
 
 
@@ -232,6 +273,14 @@ class TarskiBoard:
         resp = self._read(1)
         return resp[0] == PORT_ACK
 
+    def _send_cmd(self, opcode: int, nak_msg: str):
+        """Write a command opcode byte and require the firmware's command-byte
+        ACK, raising RuntimeError(`nak_msg`) if it NAKs. This is the preamble
+        shared by nearly every command handler."""
+        self._send(bytes([opcode]))
+        if not self._expect_ack():
+            raise RuntimeError(nak_msg)
+
     def _read_until_trn_end(self) -> bytes:
         """Read bytes until PORT_TRN_END."""
         buf = bytearray()
@@ -245,9 +294,7 @@ class TarskiBoard:
 
     def get_signature(self) -> str:
         """Request firmware version. Returns version string like '0.1.0'."""
-        self._send(bytes([PORT_SIG]))
-        if not self._expect_ack():
-            raise RuntimeError("Signature request NAK'd")
+        self._send_cmd(PORT_SIG, "Signature request NAK'd")
         data = self._read_until_trn_end()
         # Version bytes are shifted +0x30 to avoid control char collisions
         return '.'.join(str(b - 0x30) for b in data)
@@ -255,14 +302,10 @@ class TarskiBoard:
     def load_weights(self, sr_bytes: list[int]):
         """Load 90 synapse weight bytes into the shift register chain."""
         assert len(sr_bytes) == NUM_SYNAPSES, f"Expected {NUM_SYNAPSES} bytes, got {len(sr_bytes)}"
-        self._send(bytes([PORT_LOAD_SYN]))
-        if not self._expect_ack():
-            raise RuntimeError("Weight load NAK'd")
+        self._send_cmd(PORT_LOAD_SYN, "Weight load NAK'd")
         self._send(bytes(sr_bytes))
-        # Read response: ACK + TRN_END
-        resp = self._read_until_trn_end()
-        if PORT_ACK not in resp and len(resp) == 0:
-            pass  # Some firmware versions send ACK before TRN_END differently
+        # Consume the firmware's ACK + TRN_END response off the wire.
+        self._read_until_trn_end()
         return True
 
     def sample_with_synapse_pulse(self, weights: list[int],
@@ -287,9 +330,7 @@ class TarskiBoard:
         if ch10_code is None:
             ch10_code = DAC_MAX_CODE
         self.load_weights(weights)
-        codes = list(DAC_QUIESCENT_CODES)
-        codes[10] = ch10_code
-        self.load_dacs(codes)
+        self.load_dacs(ch10_drive_codes(ch10_code))
         time.sleep(0.001)  # DAC settle
         snapshots = self.run_inference(num_samples, interval_us)
         # Release ch10 and leave the board quiescent.
@@ -339,9 +380,7 @@ class TarskiBoard:
     def scan_i2c(self) -> list[int]:
         """Scan MCP4728 address range 0x60..0x67 and return the list of
         addresses that ACKed. Uses PORT_SCAN_I2C on the firmware."""
-        self._send(bytes([PORT_SCAN_I2C]))
-        if not self._expect_ack():
-            raise RuntimeError("Scan I2C NAK'd on command byte")
+        self._send_cmd(PORT_SCAN_I2C, "Scan I2C NAK'd on command byte")
         # Response shape: [ACK, bitmap_byte, TRN_END]
         resp = self._read_until_trn_end()
         if len(resp) < 2 or resp[0] != PORT_ACK:
@@ -359,9 +398,7 @@ class TarskiBoard:
         """
         n = len(codes)
         assert 1 <= n <= 12, f"DAC count must be 1-12, got {n}"
-        self._send(bytes([PORT_LOAD_DAC]))
-        if not self._expect_ack():
-            raise RuntimeError("DAC load NAK'd on command byte")
+        self._send_cmd(PORT_LOAD_DAC, "DAC load NAK'd on command byte")
         self._send(bytes([n]))
         for code in codes:
             code = max(0, min(DAC_MAX_CODE, code))
@@ -371,34 +408,26 @@ class TarskiBoard:
 
     def read_output(self) -> int:
         """Read the 16-bit spike output word from the 74HC165 latches."""
-        self._send(bytes([PORT_READ_OUT]))
-        if not self._expect_ack():
-            raise RuntimeError("Read output NAK'd")
+        self._send_cmd(PORT_READ_OUT, "Read output NAK'd")
         data = self._read(2)  # LSB, MSB
         trn = self._read(1)   # TRN_END
         return data[0] | (data[1] << 8)
 
     def read_measurement(self, channel: int) -> int:
         """Read ADC measurement. channel: 0=L1, 1=L2."""
-        self._send(bytes([PORT_READ_MEAS]))
-        if not self._expect_ack():
-            raise RuntimeError("Measurement NAK'd")
+        self._send_cmd(PORT_READ_MEAS, "Measurement NAK'd")
         self._send(bytes([channel]))
         data = self._read(2)
         trn = self._read(1)
         return data[0] | (data[1] << 8)
 
     def set_flag(self, flag: int):
-        self._send(bytes([PORT_SET_FLAG]))
-        if not self._expect_ack():
-            raise RuntimeError("Set flag NAK'd on command byte")
+        self._send_cmd(PORT_SET_FLAG, "Set flag NAK'd on command byte")
         self._send(bytes([flag]))
         self._expect_final_ack(f"set_flag({flag})")
 
     def unset_flag(self, flag: int):
-        self._send(bytes([PORT_UNSET_FLAG]))
-        if not self._expect_ack():
-            raise RuntimeError("Unset flag NAK'd on command byte")
+        self._send_cmd(PORT_UNSET_FLAG, "Unset flag NAK'd on command byte")
         self._send(bytes([flag]))
         self._expect_final_ack(f"unset_flag({flag})")
 
@@ -502,9 +531,7 @@ class TarskiBoard:
         To get spike counts: sum the bits across all samples.
         """
         assert 1 <= num_samples <= 250
-        self._send(bytes([ord('R')]))  # PORT_RUN_INF
-        if not self._expect_ack():
-            raise RuntimeError("RunInference NAK'd")
+        self._send_cmd(ord('R'), "RunInference NAK'd")  # PORT_RUN_INF
         self._send(bytes([
             num_samples,
             interval_us & 0xFF,
@@ -555,9 +582,7 @@ class TarskiBoard:
         assert 1 <= window_ms <= 1000
         assert meas_source in (0, 1)
         driven_mask = 0x01 if drive_ch10 else 0x00
-        self._send(bytes([PORT_MEAS_SPKS]))
-        if not self._expect_ack():
-            raise RuntimeError("measure_spikes NAK'd on command byte")
+        self._send_cmd(PORT_MEAS_SPKS, "measure_spikes NAK'd on command byte")
         self._send(bytes([
             target_channel,
             dac_code & 0xFF, (dac_code >> 8) & 0xFF,
@@ -599,9 +624,7 @@ class TarskiBoard:
         assert 0 <= num_cycles <= 0xFFFF
         assert 0 <= high_us <= 0xFFFF
         assert 0 <= low_us <= 0xFFFF
-        self._send(bytes([PORT_CH10_BURST]))
-        if not self._expect_ack():
-            raise RuntimeError("ch10_burst NAK'd on command byte")
+        self._send_cmd(PORT_CH10_BURST, "ch10_burst NAK'd on command byte")
         self._send(bytes([
             num_cycles & 0xFF, (num_cycles >> 8) & 0xFF,
             high_us & 0xFF, (high_us >> 8) & 0xFF,
@@ -624,9 +647,7 @@ class TarskiBoard:
 
         Returns elapsed microseconds, or None if no spike within timeout.
         """
-        self._send(bytes([ord('C')]))  # PORT_CALIB_L1
-        if not self._expect_ack():
-            raise RuntimeError("CalibL1 NAK'd")
+        self._send_cmd(ord('C'), "CalibL1 NAK'd")  # PORT_CALIB_L1
         self._send(bytes([
             dac_channel,
             dac_code & 0xFF, (dac_code >> 8) & 0xFF,
@@ -759,11 +780,7 @@ class TarskiBoard:
         snapshots = self.run_inference(num_samples, interval_us)
 
         # Count spikes per output neuron across all snapshots
-        spike_counts = [0] * 10
-        for word in snapshots:
-            bits = extract_output_spikes(word)
-            for i in range(10):
-                spike_counts[i] += bits[i]
+        spike_counts = accumulate_spike_counts(snapshots)
 
         # Prediction: argmax of spike counts
         prediction = max(range(10), key=lambda i: spike_counts[i])
@@ -881,10 +898,7 @@ class TarskiBoard:
             snaps = self.sample_with_synapse_pulse(
                 sr_all, num_samples=n_samples, interval_us=interval_us,
             )
-            fires_all += sum(
-                1 for w in snaps
-                if extract_output_spikes(w)[observable_output]
-            )
+            fires_all += count_observable_fires(snaps, observable_output)
         results['baseline_all_plus7_fires'] = fires_all
         print(f"    all-90 @ +7 → O{observable_output}: "
               f"{fires_all}/{3*n_samples} fires across 3 runs")
@@ -907,10 +921,7 @@ class TarskiBoard:
             snaps = self.sample_with_synapse_pulse(
                 sr_bytes, num_samples=n_samples, interval_us=interval_us,
             )
-            fires = sum(
-                1 for w in snaps
-                if extract_output_spikes(w)[observable_output]
-            )
+            fires = count_observable_fires(snaps, observable_output)
             results['fires_per_byte'][byte_idx] = fires
             if fires > 0:
                 results['winning_bytes'].append(byte_idx)
@@ -945,10 +956,7 @@ class TarskiBoard:
                 snaps = self.sample_with_synapse_pulse(
                     sr_bytes, num_samples=n_samples, interval_us=interval_us,
                 )
-                fires = sum(
-                    1 for w in snaps
-                    if extract_output_spikes(w)[observable_output]
-                )
+                fires = count_observable_fires(snaps, observable_output)
                 results['row_pair_fires'][f'row{row}_all10'] = fires
                 mark = '●' if fires > 0 else '·'
                 print(f"    all 10 bytes in row {row} (bytes {base}..{base+9}): "
@@ -971,10 +979,7 @@ class TarskiBoard:
                     snaps = self.sample_with_synapse_pulse(
                         sr_bytes, num_samples=n_samples, interval_us=interval_us,
                     )
-                    fires = sum(
-                        1 for w in snaps
-                        if extract_output_spikes(w)[observable_output]
-                    )
+                    fires = count_observable_fires(snaps, observable_output)
                     mark = '●' if fires > 0 else '·'
                     print(f"    first {k:2d} bytes of row {r} enabled: "
                           f"{mark}  ({fires}/{n_samples})")
@@ -997,10 +1002,7 @@ class TarskiBoard:
                 snaps = self.sample_with_synapse_pulse(
                     sr_bytes, num_samples=n_samples, interval_us=interval_us,
                 )
-                fires = sum(
-                    1 for w in snaps
-                    if extract_output_spikes(w)[observable_output]
-                )
+                fires = count_observable_fires(snaps, observable_output)
                 per_bit_fires[bit] = fires
                 mark = '●' if fires > 0 else '·'
                 print(f"    byte[{b}] = 0b{1<<bit:08b} (bit {bit}): "
@@ -1071,10 +1073,7 @@ class TarskiBoard:
             snaps = self.sample_with_synapse_pulse(
                 sr_bytes, num_samples=n_samples, interval_us=interval_us,
             )
-            fires = sum(
-                1 for w in snaps
-                if extract_output_spikes(w)[observable_output]
-            )
+            fires = count_observable_fires(snaps, observable_output)
             results['per_hidden'][h] = {'byte_index': idx, 'fires': fires}
             mark = '●' if fires > 0 else '·'
             print(f"    H{h} → O{observable_output}  "
@@ -1152,9 +1151,7 @@ class TarskiBoard:
         # ch10 asserted HIGH.
         def l2_under(weights: list[int], label: str) -> int:
             self.load_weights(weights)
-            codes = list(DAC_QUIESCENT_CODES)
-            codes[10] = DAC_MAX_CODE
-            self.load_dacs(codes)
+            self.load_dacs(ch10_drive_codes())
             time.sleep(0.005)
             # L2 wired-OR: enable meas path, sample via firmware's
             # ReadMeasurement(source=1).
@@ -1163,7 +1160,7 @@ class TarskiBoard:
             self.load_dacs(list(DAC_QUIESCENT_CODES))
             self.load_weights([SR_IDLE_BYTE] * NUM_SYNAPSES)
             time.sleep(0.002)
-            print(f"  [L2 wired-OR] {label:<24}  ADC={v:4d}  (~{v*5.0/1023:.2f} V)")
+            print(f"  [L2 wired-OR] {label:<24}  ADC={v:4d}  (~{adc_to_volts(v):.2f} V)")
             return v
 
         # 1+2. L2 probe with three weight patterns.
@@ -1176,7 +1173,7 @@ class TarskiBoard:
         self.quiesce(zero_weights=True)
         time.sleep(0.005)
         l2_idle = self.read_measurement(1)
-        print(f"  [L2 wired-OR] {'idle (ch10=0, w=0)':<24}  ADC={l2_idle:4d}  (~{l2_idle*5.0/1023:.2f} V)")
+        print(f"  [L2 wired-OR] {'idle (ch10=0, w=0)':<24}  ADC={l2_idle:4d}  (~{adc_to_volts(l2_idle):.2f} V)")
         results['l2_idle'] = l2_idle
 
         results['l2_w0_ch10hi'] = l2_under(w_zero,  "w=0       ch10=HI")
@@ -1214,9 +1211,7 @@ class TarskiBoard:
         # single "raw" read_output right after loading, before any
         # reset.
         self.load_weights(w_plus7)
-        codes = list(DAC_QUIESCENT_CODES)
-        codes[10] = DAC_MAX_CODE
-        self.load_dacs(codes)
+        self.load_dacs(ch10_drive_codes())
         time.sleep(0.01)
         raw_words = [self.read_output() for _ in range(6)]
         self.quiesce(zero_weights=True)
@@ -1361,9 +1356,7 @@ class TarskiBoard:
             time.sleep(0.005)
             idle_flip = self.read_output()
             self.load_weights(w_plus7)
-            codes = list(DAC_QUIESCENT_CODES)
-            codes[10] = DAC_MAX_CODE
-            self.load_dacs(codes)
+            self.load_dacs(ch10_drive_codes())
             time.sleep(0.01)
             flip_words = [self.read_output() for _ in range(6)]
             self.quiesce(zero_weights=True)
@@ -1574,9 +1567,7 @@ class TarskiBoard:
         self.quiesce(zero_weights=True)
         time.sleep(0.02)
         l1_off = self.read_measurement(0)
-        codes = list(DAC_QUIESCENT_CODES)
-        codes[10] = DAC_MAX_CODE
-        self.load_dacs(codes)
+        self.load_dacs(ch10_drive_codes())
         time.sleep(0.02)
         l1_on = self.read_measurement(0)
         # Also dump raw output latch word while ch10 is still HIGH + all
@@ -1584,8 +1575,8 @@ class TarskiBoard:
         # anything-other-than-the-ch10-drive.
         raw_ch10_on_noweights = self.read_output()
         self.quiesce(zero_weights=True)
-        print(f"    ch10=0V  → L1 ADC = {l1_off}  (~{l1_off*5.0/1023:.2f} V)")
-        print(f"    ch10=HI  → L1 ADC = {l1_on}   (~{l1_on*5.0/1023:.2f} V)")
+        print(f"    ch10=0V  → L1 ADC = {l1_off}  (~{adc_to_volts(l1_off):.2f} V)")
+        print(f"    ch10=HI  → L1 ADC = {l1_on}   (~{adc_to_volts(l1_on):.2f} V)")
         print(f"    raw output word with ch10=HI (no weights) = 0x{raw_ch10_on_noweights:04X}")
         if l1_on - l1_off < 50:
             print("    WARNING: MEAS_OUT barely moves when ch10 goes HIGH.")
@@ -1598,9 +1589,9 @@ class TarskiBoard:
         # Dump raw output words from the actual all-excitatory sample run
         # so we can see what's really in the latches (before our bit
         # mapping / polarity inversion).
-        test_weights_dbg = [self.weight_to_sr_byte(7)] * 90
+        test_weights = [self.weight_to_sr_byte(7)] * 90
         snap_dbg = self.sample_with_synapse_pulse(
-            test_weights_dbg, num_samples=5, interval_us=500,
+            test_weights, num_samples=5, interval_us=500,
         )
         print(f"    raw output words (ch10=HI, all weights=+7): "
               f"{[f'0x{w:04X}' for w in snap_dbg]}")
@@ -1611,15 +1602,10 @@ class TarskiBoard:
         # synapse then sources current into its output membrane as if a
         # hidden neuron had just spiked — but under our direct,
         # deterministic control, independent of hidden-layer firing.
-        test_weights = [self.weight_to_sr_byte(7)] * 90
         snapshots = self.sample_with_synapse_pulse(
             test_weights, num_samples=50, interval_us=500,
         )
-        spike_counts = [0] * 10
-        for word in snapshots:
-            bits = extract_output_spikes(word)
-            for i in range(10):
-                spike_counts[i] += bits[i]
+        spike_counts = accumulate_spike_counts(snapshots)
 
         print(f"  All-excitatory test: spike counts = {spike_counts}")
         calib['synapse_test']['all_exc_counts'] = spike_counts

@@ -7,17 +7,16 @@ Usage:
   python lif_network_generator.py --network defaults/network_default.json --neuron defaults/neuron_default.json --mode detailed --yes
 """
 from __future__ import annotations
-import json, argparse, os, subprocess, shutil, math, textwrap, sys
+import json, argparse, os, subprocess, shutil, math, textwrap
 from dataclasses import dataclass, field
 from typing import List, Dict, Optional, Any
 
 try:
     import numpy as np
-    import pandas as pd
     import matplotlib.pyplot as plt
 except Exception:
     # Delay import errors until plotting stage
-    np = pd = plt = None
+    np = plt = None
 
 # Import neuron configuration classes from neuron generator
 from lif_neuron_generator import (
@@ -76,7 +75,7 @@ class SimData:
 
     def get(self, name: str) -> Any:
         """Case-insensitive accessor for a recorded vector."""
-        return self.vectors.get(name.strip().lower())
+        return self.vectors.get(canonical_signal_name(name))
 
 # ------------------ Utilities ------------------
 
@@ -132,9 +131,6 @@ def gen_spike_source(name: str, spikes: List[Spike], sign: float) -> str:
     points = sorted({(round(t,12), round(v,9)) for (t,v) in points})
     flat = " ".join(f"{t} {v}" for t,v in points)
     return f"Vsrc_{name} n_{name} vref PWL({flat})\n"
-
-def neuron_subckt_includes(neuron_subckt_fast: str, neuron_subckt_detailed: str) -> str:
-    return neuron_subckt_fast + "\n" + neuron_subckt_detailed + "\n"
 
 # ------------------ Netlist builder ------------------
 
@@ -648,7 +644,7 @@ def main():
     wants = ["fast"] if args.mode == "fast" else (["detailed"] if args.mode == "detailed" else ["fast","detailed"])
     power_reports: List[tuple[str, Dict[str, Any]]] = []
 
-    for i,mode in enumerate(wants):
+    for mode in wants:
         csv_name = f"lif_{mode}.csv"
         cir_name = f"lif_{mode}.cir"
         cir_path = os.path.join(outdir, cir_name)

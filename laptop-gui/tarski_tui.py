@@ -9,21 +9,31 @@ Usage:
 import argparse
 import json
 import sys
-import time
-from pathlib import Path
 
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, ScrollableContainer
 from textual.widgets import (
-    Header, Footer, Static, Button, Log, Input, Select,
-    ProgressBar, Label, RichLog
+    Header, Footer, Static, Button, Label, RichLog
 )
 from textual.reactive import reactive
 from textual import work
 
-from tarski_board import TarskiBoard, NUM_SYNAPSES, DAC_VREF, DAC_MAX_CODE, V_BE
+from tarski_board import TarskiBoard, load_mnist, normalize_mnist
 
 import numpy as np
+
+
+def downsample_array_split(img: np.ndarray) -> np.ndarray:
+    """Downsample a 2-D image to 6x6 via np.array_split block means.
+
+    NOTE: this DIVERGES from the board's int(ty*scale) floor-block downsample.
+    For a non-divisible axis length (e.g. 28) np.array_split yields uneven
+    blocks, so the nested np.array is inhomogeneous and raises ValueError —
+    behavior the characterization suite pins deliberately.
+    """
+    h_blocks = np.array_split(img, 6, axis=0)
+    small = np.array([np.array_split(hb, 6, axis=1) for hb in h_blocks])
+    return np.array([[block.mean() for block in row] for row in small])
 
 
 class StatusPanel(Static):
@@ -142,24 +152,21 @@ class TarskiTUI(App):
 
     # ── Button handlers ──
 
+    _BUTTON_ACTIONS = {
+        "btn-connect": "action_connect",
+        "btn-setup-dacs": "action_setup_dacs",
+        "btn-calibrate": "action_calibrate",
+        "btn-load-model": "action_load_model",
+        "btn-infer": "action_infer_sample",
+        "btn-run-100": "action_run_batch",
+        "btn-prev": "action_prev_sample",
+        "btn-next": "action_next_sample",
+    }
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        btn = event.button.id
-        if btn == "btn-connect":
-            self.action_connect()
-        elif btn == "btn-setup-dacs":
-            self.action_setup_dacs()
-        elif btn == "btn-calibrate":
-            self.action_calibrate()
-        elif btn == "btn-load-model":
-            self.action_load_model()
-        elif btn == "btn-infer":
-            self.action_infer_sample()
-        elif btn == "btn-run-100":
-            self.action_run_batch()
-        elif btn == "btn-prev":
-            self.action_prev_sample()
-        elif btn == "btn-next":
-            self.action_next_sample()
+        handler = self._BUTTON_ACTIONS.get(event.button.id)
+        if handler is not None:
+            getattr(self, handler)()
 
     # ── Actions ──
 
@@ -239,16 +246,8 @@ class TarskiTUI(App):
             self.log_msg(f"[red]Failed: {e}[/]")
 
     def _load_mnist(self) -> None:
-        import struct
-        images_path = f"{self.data_dir}/t10k-images-idx3-ubyte"
-        labels_path = f"{self.data_dir}/t10k-labels-idx1-ubyte"
         try:
-            with open(images_path, 'rb') as f:
-                magic, n, rows, cols = struct.unpack('>4I', f.read(16))
-                self.images = np.frombuffer(f.read(), dtype=np.uint8).reshape(n, rows, cols)
-            with open(labels_path, 'rb') as f:
-                magic, n = struct.unpack('>2I', f.read(8))
-                self.labels = np.frombuffer(f.read(), dtype=np.uint8)
+            self.images, self.labels = load_mnist(self.data_dir)
             self.log_msg(f"[green]Loaded {len(self.labels)} MNIST test samples[/]")
         except Exception as e:
             self.log_msg(f"[red]MNIST load failed: {e}[/]")
@@ -257,10 +256,7 @@ class TarskiTUI(App):
         if self.images is None:
             return None
         img = self.images[idx].astype(np.float32)
-        h_blocks = np.array_split(img, 6, axis=0)
-        small = np.array([np.array_split(hb, 6, axis=1) for hb in h_blocks])
-        pixels_6x6 = np.array([[block.mean() for block in row] for row in small])
-        return (pixels_6x6 / 255.0 - 0.1307) / 0.3081
+        return normalize_mnist(downsample_array_split(img))
 
     @work(thread=True)
     def action_infer_sample(self) -> None:
@@ -323,15 +319,16 @@ class TarskiTUI(App):
 
         self.log_msg(f"[bold green]Batch result: {correct}/100 ({correct}%)[/]")
 
-    def action_next_sample(self) -> None:
-        self.sample_idx = min(self.sample_idx + 1, 9999)
+    def _move_sample(self, delta: int) -> None:
+        self.sample_idx = max(0, min(self.sample_idx + delta, 9999))
         lbl = self.query_one("#sample-label", Label)
         lbl.update(f"Sample: {self.sample_idx}")
 
+    def action_next_sample(self) -> None:
+        self._move_sample(1)
+
     def action_prev_sample(self) -> None:
-        self.sample_idx = max(self.sample_idx - 1, 0)
-        lbl = self.query_one("#sample-label", Label)
-        lbl.update(f"Sample: {self.sample_idx}")
+        self._move_sample(-1)
 
 
 def main():

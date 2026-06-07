@@ -13,8 +13,11 @@ Key differences from the TIA version:
 - Simpler, more power-efficient, but less linear current summation
 """
 from __future__ import annotations
-import json, argparse, os
+
+import argparse
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
 
 # -------------------- Config dataclasses --------------------
 
@@ -65,7 +68,7 @@ class PassiveNeuronConfig:
 
     @staticmethod
     def load(json_path: str) -> "PassiveNeuronConfig":
-        with open(json_path, "r") as f:
+        with open(json_path, "r", encoding="utf-8") as f:
             d = json.load(f)
         return PassiveNeuronConfig(
             name=d.get("name", "lif_passive"),
@@ -231,22 +234,21 @@ def main():
         cfg = PassiveNeuronConfig.default()
         cfg.name = args.name
 
-    os.makedirs(args.outdir, exist_ok=True)
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
 
     subckt = generate_passive_neuron(cfg)
-    subckt_path = os.path.join(args.outdir, f"{cfg.name}_passive.subckt")
-    with open(subckt_path, "w") as f:
-        f.write(subckt)
+    subckt_path = str(outdir / f"{cfg.name}_passive.subckt")
+    Path(subckt_path).write_text(subckt, encoding="utf-8")
 
     # Also generate a test netlist
     test_netlist = generate_test_netlist(
         cfg,
         subckt_path,
-        os.path.join(args.outdir, "passive_output.csv")
+        str(outdir / "passive_output.csv"),
     )
-    test_path = os.path.join(args.outdir, f"{cfg.name}_test.cir")
-    with open(test_path, "w") as f:
-        f.write(test_netlist)
+    test_path = outdir / f"{cfg.name}_test.cir"
+    test_path.write_text(test_netlist, encoding="utf-8")
 
     print(f"Generated passive neuron subcircuit: {subckt_path}")
     print(f"Generated test netlist: {test_path}")

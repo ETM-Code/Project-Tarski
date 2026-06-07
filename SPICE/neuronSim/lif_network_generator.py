@@ -7,9 +7,16 @@ Usage:
   python lif_network_generator.py --network defaults/network_default.json --neuron defaults/neuron_default.json --mode detailed --yes
 """
 from __future__ import annotations
-import json, argparse, os, subprocess, shutil, math, textwrap
+
+import argparse
+import json
+import math
+import os
+import shutil
+import subprocess
+import textwrap
 from dataclasses import dataclass, field
-from typing import List, Dict, Optional, Any
+from typing import Any, Callable, Dict, List, Optional
 
 try:
     import numpy as np
@@ -54,7 +61,7 @@ class NetworkConfig:
 
     @staticmethod
     def load(path: str) -> "NetworkConfig":
-        with open(path, "r") as f:
+        with open(path, "r", encoding="utf-8") as f:
             d = json.load(f)
         synapses = [Synapse(
             name=s["name"],
@@ -134,22 +141,26 @@ def gen_spike_source(name: str, spikes: List[Spike], sign: float) -> str:
 
 # ------------------ Netlist builder ------------------
 
-def build_netlist(cfgN: NetworkConfig, cfg: NeuronConfig, mode: str, out_csv: str) -> str:
-    title = f"* {cfgN.title} [{mode.upper()}]"
-    lines = [title, ""]
 
-    # Supplies
+def _emit_supplies(lines: List[str], cfg: NeuronConfig) -> None:
     lines.append(f"VDD vdd 0 {cfg.supplies.vdd}")
     lines.append(f"VREF vref 0 {cfg.supplies.vref}")
-
     # Global simulation options to keep output compact & stable
     lines.append(".options method=gear maxord=2 reltol=2e-3 trtol=7")
 
+
+def _emit_neuron(
+    lines: List[str],
+    cfg: NeuronConfig,
+    mode: str,
+    fast_emitter: Callable[[NeuronConfig], str],
+    detailed_emitter: Callable[[NeuronConfig], str],
+) -> None:
     # Include only the subcircuit for the selected mode (avoid duplicate macro defs)
     if mode == "fast":
-        lines.append(generate_fast_neuron(cfg))
+        lines.append(fast_emitter(cfg))
     else:
-        lines.append(generate_detailed_neuron(cfg))
+        lines.append(detailed_emitter(cfg))
 
     # Neuron instance
     if mode == "fast":
@@ -158,6 +169,8 @@ def build_netlist(cfgN: NetworkConfig, cfg: NeuronConfig, mode: str, out_csv: st
         # inside build_netlist()
         lines.append(f"XNEU mem vref vdd comp ana sum {cfg.name}_detailed")
 
+
+def _emit_hybrid_combiner(lines: List[str]) -> None:
     # --- Hybrid combiner: match PCB ---
     # Analog path: 100 Ω from analog op-amp to the output node
     # Digital path: Schottky from comparator to the same node (diode-OR)
@@ -169,16 +182,38 @@ def build_netlist(cfgN: NetworkConfig, cfg: NeuronConfig, mode: str, out_csv: st
         ".model   D_SCHOTTKY D(Is=1e-6 N=1.05 Rs=2 Cjo=2p Vj=0.3 M=0.3 Eg=0.69)"
     ]
 
-    # Signals to write (order matters for the plotter)
-    signals = ["v(vref)", "v(mem)", "v(comp)", "v(ana)", "v(n_outmix)", "v(sum)"]
 
-    # Synapses
+def _emit_synapses(lines: List[str], signals: List[str], cfgN: NetworkConfig) -> None:
     for syn in cfgN.synapses:
         sign = +1.0 if syn.type.lower().startswith("excit") else -1.0
         lines.append(gen_spike_source(syn.name, syn.spikes, sign))
         signals.append(f"v(n_{syn.name})")
         signals.append(f"i(Vsrc_{syn.name})")
         lines.append(f"R_{syn.name} n_{syn.name} sum {syn.weight_ohm}")
+
+
+def build_netlist(
+    cfgN: NetworkConfig,
+    cfg: NeuronConfig,
+    mode: str,
+    out_csv: str,
+    fast_emitter: Optional[Callable[[NeuronConfig], str]] = None,
+    detailed_emitter: Optional[Callable[[NeuronConfig], str]] = None,
+) -> str:
+    fast_emitter = fast_emitter or generate_fast_neuron
+    detailed_emitter = detailed_emitter or generate_detailed_neuron
+
+    title = f"* {cfgN.title} [{mode.upper()}]"
+    lines = [title, ""]
+
+    _emit_supplies(lines, cfg)
+    _emit_neuron(lines, cfg, mode, fast_emitter, detailed_emitter)
+    _emit_hybrid_combiner(lines)
+
+    # Signals to write (order matters for the plotter)
+    signals = ["v(vref)", "v(mem)", "v(comp)", "v(ana)", "v(n_outmix)", "v(sum)"]
+
+    _emit_synapses(lines, signals, cfgN)
 
     # Record supply currents for power estimation
     signals.append("i(VDD)")
@@ -260,7 +295,7 @@ def load_sim_data(csv_path: str) -> SimData:
 
     names = None
     rows = []
-    with open(csv_path, "r") as f:
+    with open(csv_path, "r", encoding="utf-8") as f:
         for line in f:
             s = line.strip()
             if not s or s.startswith("*"):
@@ -339,6 +374,20 @@ def load_sim_data(csv_path: str) -> SimData:
 
 # ------------------ Plotter ------------------
 
+def _save_plot(plt, png_path: str, title: str, xlabel: str, ylabel: str,
+               plot_calls: List[tuple]) -> None:
+    """Run the common figure/plot/title/grid/legend/save/close lifecycle.
+
+    ``plot_calls`` is a list of ``(args, kwargs)`` tuples passed straight through
+    to ``plt.plot`` so each curve's styling is preserved exactly.
+    """
+    plt.figure()
+    for args, kwargs in plot_calls:
+        plt.plot(*args, **kwargs)
+    plt.title(title); plt.xlabel(xlabel); plt.ylabel(ylabel)
+    plt.grid(True); plt.legend(); plt.savefig(png_path, dpi=160); plt.close()
+
+
 def plot_results(csv_path: str, png_prefix: str, synapses: Optional[List[Synapse]] = None, sim_data: Optional[SimData] = None) -> Optional[SimData]:
     import numpy as np, matplotlib.pyplot as plt
 
@@ -392,70 +441,82 @@ def plot_results(csv_path: str, png_prefix: str, synapses: Optional[List[Synapse
                 syn_labels.append(label)
 
     if syn_series:
-        plt.figure()
-        for sig, label in zip(syn_series, syn_labels):
-            plt.plot(time*1e3, sig, label=label)
-        plt.title("Synaptic spikes (absolute)"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
-        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_spikes.png", dpi=160); plt.close()
+        _save_plot(
+            plt, f"{png_prefix}_spikes.png",
+            "Synaptic spikes (absolute)", "Time (ms)", "Voltage (V)",
+            [((time*1e3, sig), {"label": label})
+             for sig, label in zip(syn_series, syn_labels)],
+        )
 
     if vmem is not None and vref is not None:
-        plt.figure()
-        plt.plot(time*1e3, vmem, label="Vmem")
-        plt.plot(time*1e3, vref, '--', label="Vref")
-        plt.title("Membrane voltage"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
-        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_vmem.png", dpi=160); plt.close()
+        _save_plot(
+            plt, f"{png_prefix}_vmem.png",
+            "Membrane voltage", "Time (ms)", "Voltage (V)",
+            [
+                ((time*1e3, vmem), {"label": "Vmem"}),
+                ((time*1e3, vref, '--'), {"label": "Vref"}),
+            ],
+        )
 
     if vcomp is not None:
-        plt.figure()
-        plt.plot(time*1e3, vcomp, label="Vcomp (comparator out)")
-        plt.title("Digital output (from comparator)"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
-        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_comp.png", dpi=160); plt.close()
+        _save_plot(
+            plt, f"{png_prefix}_comp.png",
+            "Digital output (from comparator)", "Time (ms)", "Voltage (V)",
+            [((time*1e3, vcomp), {"label": "Vcomp (comparator out)"})],
+        )
 
     if vana is not None:
-        plt.figure()
-        plt.plot(time*1e3, vana, label="Analog out (Vmem - Vref)")
-        plt.title("Analog output"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
-        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_analog.png", dpi=160); plt.close()
+        _save_plot(
+            plt, f"{png_prefix}_analog.png",
+            "Analog output", "Time (ms)", "Voltage (V)",
+            [((time*1e3, vana), {"label": "Analog out (Vmem - Vref)"})],
+        )
 
     if vcomb is not None:
-        plt.figure()
-        plt.plot(time*1e3, vcomb, '--', linewidth=2, label="Combined (post-diode mix)")
+        calls = [((time*1e3, vcomb, '--'), {"linewidth": 2, "label": "Combined (post-diode mix)"})]
         if vcomp is not None:
-            plt.plot(time*1e3, vcomp, label="Comparator (pre-mix)")
+            calls.append(((time*1e3, vcomp), {"label": "Comparator (pre-mix)"}))
         if vana is not None:
-            plt.plot(time*1e3, vana, label="Analog (pre-mix)")
-        plt.title("Hybrid output (analog + digital)"); plt.xlabel("Time (ms)"); plt.ylabel("Voltage (V)")
-        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_hybrid.png", dpi=160); plt.close()
+            calls.append(((time*1e3, vana), {"label": "Analog (pre-mix)"}))
+        _save_plot(
+            plt, f"{png_prefix}_hybrid.png",
+            "Hybrid output (analog + digital)", "Time (ms)", "Voltage (V)", calls,
+        )
 
     if dv_rc is not None or dv_cap is not None:
-        plt.figure()
+        calls = []
         if dv_rc is not None:
-            plt.plot(time*1e3, dv_rc, label="ΔV (Vmem - Vref) [RC]")
+            calls.append(((time*1e3, dv_rc), {"label": "ΔV (Vmem - Vref) [RC]"}))
         if dv_cap is not None:
-            plt.plot(time*1e3, dv_cap, label="Vcap = Vmem - Vsum [TIA]")
-        plt.title("Membrane / integrator deltas"); plt.xlabel("Time (ms)"); plt.ylabel("Volts (V)")
-        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_deltas.png", dpi=160); plt.close()
+            calls.append(((time*1e3, dv_cap), {"label": "Vcap = Vmem - Vsum [TIA]"}))
+        _save_plot(
+            plt, f"{png_prefix}_deltas.png",
+            "Membrane / integrator deltas", "Time (ms)", "Volts (V)", calls,
+        )
 
     if Q is not None:
-        plt.figure()
-        plt.plot(time*1e3, Q, label="Charge Q = C·(Vmem - Vsum)")
-        plt.title("Membrane charge accumulation"); plt.xlabel("Time (ms)"); plt.ylabel("Coulombs")
-        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_charge.png", dpi=160); plt.close()
+        _save_plot(
+            plt, f"{png_prefix}_charge.png",
+            "Membrane charge accumulation", "Time (ms)", "Coulombs",
+            [((time*1e3, Q), {"label": "Charge Q = C·(Vmem - Vsum)"})],
+        )
 
     if vdef_dbg is not None or vtheta_dbg is not None:
-        plt.figure()
+        calls = []
         if vdef_dbg is not None:
-            plt.plot(time*1e3, vdef_dbg, label="vdef  = Vref - Vmem")
+            calls.append(((time*1e3, vdef_dbg), {"label": "vdef  = Vref - Vmem"}))
         if vtheta_dbg is not None:
-            plt.plot(time*1e3, vtheta_dbg, label="vtheta (rel)")
+            calls.append(((time*1e3, vtheta_dbg), {"label": "vtheta (rel)"}))
         if (vdef_dbg is not None) and (vtheta_dbg is not None):
-            plt.plot(time*1e3, vdef_dbg - vtheta_dbg, label="margin (vdef - vtheta)")
+            calls.append(((time*1e3, vdef_dbg - vtheta_dbg), {"label": "margin (vdef - vtheta)"}))
         if vcomp_raw is not None:
-            plt.plot(time*1e3, vcomp_raw, '--', label="comp_raw (internal)")
+            calls.append(((time*1e3, vcomp_raw, '--'), {"label": "comp_raw (internal)"}))
         if vcomp is not None:
-            plt.plot(time*1e3, vcomp, ':', label="comp_out (pin)")
-        plt.title("Comparator internals"); plt.xlabel("Time (ms)"); plt.ylabel("Volts (V)")
-        plt.grid(True); plt.legend(); plt.savefig(f"{png_prefix}_comp_debug.png", dpi=160); plt.close()
+            calls.append(((time*1e3, vcomp, ':'), {"label": "comp_out (pin)"}))
+        _save_plot(
+            plt, f"{png_prefix}_comp_debug.png",
+            "Comparator internals", "Time (ms)", "Volts (V)", calls,
+        )
 
         if vcomp is not None:
             vmin, vmax = float(np.nanmin(vcomp)), float(np.nanmax(vcomp))
@@ -630,11 +691,20 @@ def print_power_report(stage: str, stats: Dict[str, Any]) -> None:
 
 # ------------------ Main ------------------
 
-def main():
+def main(neuron_config_loader=None, netlist_builder=None):
+    """Run the generate/simulate/plot/power pipeline.
+
+    ``neuron_config_loader`` and ``netlist_builder`` let the pulse-stretch
+    variant reuse this driver with its own neuron backend without duplicating
+    the body. They default to this module's own loader/builder.
+    """
+    neuron_config_loader = neuron_config_loader or NeuronConfig.load
+    netlist_builder = netlist_builder or build_netlist
+
     args = parse_args()
     outdir = ensure_outputs_dir()
     cfgN = NetworkConfig.load(args.network)
-    cfg = NeuronConfig.load(args.neuron)
+    cfg = neuron_config_loader(args.neuron)
 
     # Validation + predictions
     report = safety_and_math_validation(cfgN, cfg)["text"]
@@ -651,8 +721,8 @@ def main():
         csv_path = os.path.join(outdir, csv_name)
         csv_abs  = os.path.abspath(csv_path)
 
-        netlist = build_netlist(cfgN, cfg, mode, csv_abs)
-        with open(cir_path, "w") as f:
+        netlist = netlist_builder(cfgN, cfg, mode, csv_abs)
+        with open(cir_path, "w", encoding="utf-8") as f:
             f.write(netlist)
         print(f"Wrote {cir_path}")
 

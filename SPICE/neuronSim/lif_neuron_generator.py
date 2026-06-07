@@ -9,8 +9,20 @@ DETAIL: adds Vref buffer, finite op-amp gain/pole, physical hysteresis network,
 This file builds the NEURON subckts. The network (spikes/synapses) is in lif_network_generator.py.
 """
 from __future__ import annotations
-import json, argparse, os
+
+import argparse
+import json
 from dataclasses import dataclass, field
+from pathlib import Path
+
+# -------------------- Circuit constants --------------------
+# Named here for clarity; the emission sites keep the exact literal formatting
+# so generated netlists remain byte-identical.
+
+DIVIDER_RVH_OHM = 681e3         # upper threshold-divider resistor (vdd -> vth_node)
+DIVIDER_RVL_OHM = 316e3         # lower threshold-divider resistor (vth_node -> vref)
+RF_MIN_OHM = 100e3              # lower bound on hysteresis feedback resistor
+COMP_VSW = "0.01"               # soft-comparator transition width param
 
 # -------------------- Config dataclasses --------------------
 
@@ -112,7 +124,7 @@ class NeuronConfig:
 
     @staticmethod
     def load(json_path: str) -> "NeuronConfig":
-        with open(json_path, "r") as f:
+        with open(json_path, "r", encoding="utf-8") as f:
             d = json.load(f)
         # Parse pulse_stretch config, handling both snake_case and PascalCase keys
         ps_dict = d.get("pulse_stretch", {})
@@ -173,22 +185,20 @@ def generate_fast_neuron(cfg: NeuronConfig) -> str:
                       f".subckt {cfg.name}_fast", 1)
     return det
 
-# -------------------- DETAILED subcircuit --------------------
+# -------------------- DETAILED subcircuit emitters --------------------
 
-def generate_detailed_neuron(cfg: NeuronConfig) -> str:
-    s = []
-    s.append(_header(f"{cfg.name} DETAILED neuron subcircuit"))
-    # pins: mem vref vdd comp_out analog_out sum
-    s.append(f".subckt {cfg.name}_detailed mem vref vdd comp_out analog_out sum\n")
 
-    # Vref buffer (opa-like follower to give vref some source stiffness)
+def _emit_vref_buffer(s: list[str]) -> None:
+    """Vref buffer (opa-like follower to give vref some source stiffness)."""
     s.append("* Vref buffer (OPA604-like)\n")
     s.append("Ebuf vref_buf 0 vref 0 1e5\n")
     s.append("Rbuf vref_buf vref 1k\n")
     s.append("Cbuf vref 0 80p\n")
     s.append("Rvr  vref vref_buf 1m\n")
 
-    # TIA with finite DC gain and small pole to avoid algebraic loops
+
+def _emit_tia(s: list[str], cfg: NeuronConfig) -> None:
+    """TIA with finite DC gain and small pole to avoid algebraic loops."""
     s.append("* TIA op-amp with finite gain and compensation\n")
     s.append("Eint mem 0 sum vref 2e5\n")
     s.append("Rout_int mem 0 20\n")
@@ -197,7 +207,9 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
     s.append(f"Rleak mem sum {cfg.membrane.R_leak_ohm}\n")
     s.append(f"Iint_bias vdd 0 {cfg.bias_currents.tia_A}\n")
 
-    # Physical hysteresis divider around a threshold node in absolute volts
+
+def _emit_threshold_network(s: list[str], cfg: NeuronConfig) -> None:
+    """Physical hysteresis divider + adaptive threshold injection."""
     vhi = cfg.comparator.vhigh_V
     vlo = cfg.comparator.vlow_V
     dv_out = max(vhi - vlo, 1e-6)
@@ -205,8 +217,8 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
 
     s.append("* Divider to place threshold near Vref + over_vref_V\n")
     scale = cfg.threshold.divider_scale
-    Rvh_val = 681e3 * max(scale, 1e-3)
-    Rvl_val = 316e3 * max(scale, 1e-3)
+    Rvh_val = DIVIDER_RVH_OHM * max(scale, 1e-3)
+    Rvl_val = DIVIDER_RVL_OHM * max(scale, 1e-3)
     s.append(f"Rvh  vdd     vth_node {Rvh_val:.3g}\n")
     s.append(f"Rvl  vth_node vref    {Rvl_val:.3g}\n")
 
@@ -215,7 +227,7 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
     Rf = (1.0 / (beta * g_div / max(1.0 - beta, 1e-6)))
     # Remove the previous upper clamp at 50 MΩ to match the Rust model.
     # Keep a small lower bound for numerical stability only.
-    Rf_ohm = max(Rf, 100e3)
+    Rf_ohm = max(Rf, RF_MIN_OHM)
     s.append(f"Rf   comp_out vth_node {Rf_ohm:.3g}\n")
 
     # Adaptive threshold injection (one-way from comp_out)
@@ -224,10 +236,16 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
     s.append("Rinj  comp_out ninj 2.2Meg\n")
     s.append("Dinj  ninj vth_node DADAPT\n")
 
-    # Comparator in deflection space (hard digital with RC shaping)
+
+def _emit_comparator(s: list[str], cfg: NeuronConfig) -> None:
+    """Comparator in deflection space (hard digital with RC shaping) plus the
+    optional pulse-stretch RC decay and comparator bias current."""
+    vhi = cfg.comparator.vhigh_V
+    vlo = cfg.comparator.vlow_V
+
     s.append(f".param VLO={vlo} VHI={vhi}\n")
     # Smooth comparator transfer (avoids hard discontinuity that slows the solver)
-    s.append(".param VSW=0.01\n")
+    s.append(f".param VSW={COMP_VSW}\n")
     # Comparator RC shaping: small RC derived from propagation delay (previous behaviour)
     rc   = max(cfg.comparator.prop_delay_s/10.0, 1e-9)
     rout = max(cfg.comparator.prop_delay_s/rc, 10.0)
@@ -266,7 +284,10 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
 
     s.append(f"Icomp_bias vdd 0 {cfg.bias_currents.comparator_A}\n")
 
-    # Reset path - use comp_shaped (raw comparator) for reset control, not stretched output
+
+def _emit_reset(s: list[str], cfg: NeuronConfig) -> None:
+    """Reset path - use comp_shaped (raw comparator) for reset control, not the
+    stretched output."""
     if cfg.reset.enable:
         s.append(f"Rreset mem reset_node {cfg.reset.series_R_ohm}\n")
         s.append(f"Coff_reset reset_node vref {cfg.reset.mux_Coff_F}\n")
@@ -275,9 +296,11 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
         s.append(f"Sreset reset_node vref {reset_control} 0 SWMUX\n")
         s.append(f".model SWMUX SW(Ron={cfg.reset.mux_Ron_ohm} Roff={cfg.reset.mux_Roff_ohm} Vt={cfg.reset.switch_Vt} Vh={cfg.reset.switch_Vh})\n")
 
-    # Analog output (scaled (Vmem - Vref) for plotting/hybrid)
+
+def _emit_analog_output(s: list[str], cfg: NeuronConfig) -> None:
+    """Analog output stage (scaled (Vmem - Vref) for plotting/hybrid)."""
     s.append("* Analog output stage\n")
-    
+
     if cfg.analog_out.inverting:
         # Inverting op-amp amplifier topology
         # Gain = -R2/R1
@@ -294,14 +317,14 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
         s.append("Eana_opamp ana_opamp_out 0 0 ana_inv_in 1e5\n")  # V+ = 0, V- = ana_inv_in
         s.append("Rana_int ana_opamp_out analog_out 50\n")  # output impedance
         s.append("Cana_comp analog_out 0 2p\n")  # compensation cap
-        
+
         # Inverting input network
         s.append(f"R1_ana ana_in ana_inv_in {R1:.3g}\n")  # input resistor
         s.append(f"R2_ana analog_out ana_inv_in {R2:.3g}\n")  # feedback resistor
-        
+
         # Output load
         s.append(f"Rana_load analog_out 0 {cfg.analog_out.analog_out_R_ohm}\n")
-        
+
     else:
         # Non-inverting op-amp amplifier topology
         # Gain = 1 + R2/R1
@@ -317,11 +340,11 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
         s.append("Eana_opamp ana_opamp_out 0 ana_in ana_fb 1e5\n")
         s.append("Rana_int ana_opamp_out analog_out 50\n")
         s.append("Cana_comp analog_out 0 2p\n")
-        
+
         # Feedback network: R2 from output to feedback node, R1 from feedback to ground
         s.append(f"R2_ana analog_out ana_fb {R2:.3g}\n")
         s.append(f"R1_ana ana_fb 0 {R1:.3g}\n")
-        
+
         # Output load
         s.append(f"Rana_load analog_out 0 {cfg.analog_out.analog_out_R_ohm}\n")
 
@@ -332,6 +355,20 @@ def generate_detailed_neuron(cfg: NeuronConfig) -> str:
         s.append("Dcl_hi  analog_out vdd DCLAMP\n")
 
     s.append(f"Iana_bias vdd 0 {cfg.analog_out.bias_current_A}\n")
+
+
+def generate_detailed_neuron(cfg: NeuronConfig) -> str:
+    s = []
+    s.append(_header(f"{cfg.name} DETAILED neuron subcircuit"))
+    # pins: mem vref vdd comp_out analog_out sum
+    s.append(f".subckt {cfg.name}_detailed mem vref vdd comp_out analog_out sum\n")
+
+    _emit_vref_buffer(s)
+    _emit_tia(s, cfg)
+    _emit_threshold_network(s, cfg)
+    _emit_comparator(s, cfg)
+    _emit_reset(s, cfg)
+    _emit_analog_output(s, cfg)
 
     s.append(".ends\n")
     return "".join(s)
@@ -350,14 +387,13 @@ def main():
     else:
         print("Sanity checks OK.")
 
-    os.makedirs(args.outdir, exist_ok=True)
+    outdir = Path(args.outdir)
+    outdir.mkdir(parents=True, exist_ok=True)
     fast = generate_fast_neuron(cfg)
     detailed = generate_detailed_neuron(cfg)
 
-    with open(os.path.join(args.outdir, f"{cfg.name}_fast.subckt"), "w") as f:
-        f.write(fast)
-    with open(os.path.join(args.outdir, f"{cfg.name}_detailed.subckt"), "w") as f:
-        f.write(detailed)
+    (outdir / f"{cfg.name}_fast.subckt").write_text(fast, encoding="utf-8")
+    (outdir / f"{cfg.name}_detailed.subckt").write_text(detailed, encoding="utf-8")
 
     print(f"Wrote: {args.outdir}/{cfg.name}_fast.subckt and {args.outdir}/{cfg.name}_detailed.subckt")
 

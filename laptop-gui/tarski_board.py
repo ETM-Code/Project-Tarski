@@ -65,6 +65,35 @@ DAC_MAX_CODE = (1 << DAC_BITS) - 1
 NUM_DACS = 9        # 9 hidden neurons
 NUM_SYNAPSES = 90   # 9 hidden × 10 output
 
+# Clearer dimension aliases. `NUM_DACS` historically means "number of hidden
+# neurons" (one current-mirror DAC channel each), NOT the number of MCP4728
+# chips. These names make the intent explicit at call sites without renaming
+# the tested constant.
+NUM_HIDDEN = NUM_DACS          # 9 hidden neurons
+NUM_OUTPUTS = 10               # 10 output neurons (O0..O9)
+NUM_DAC_CHANNELS = 12          # 12 DAC channels across the three MCP4728s
+
+
+def clamp_dac_code(code: int) -> int:
+    """Clamp a raw DAC code into the valid 12-bit range [0, DAC_MAX_CODE]."""
+    return max(0, min(DAC_MAX_CODE, code))
+
+
+def volts_to_dac_code(volts: float, vref: float = DAC_VREF) -> int:
+    """Convert a voltage to a clamped 12-bit DAC code against `vref`."""
+    return clamp_dac_code(int(round(volts / vref * DAC_MAX_CODE)))
+
+
+def _fc1_value_to_dac_code(g: float, scale: float) -> int:
+    """Convert one fc1 output `g` (volts) to a PNP-inverted DAC code.
+
+    Shared core of `fc1_to_dac_codes` / `fc1_to_dac_codes_calibrated`: compute
+    the conceptual drop above V_BE, invert through the PNP mirror, and clamp.
+    """
+    v_drop = max(0.0, min(DAC_VREF, g * scale + V_BE))
+    v_dac = DAC_VREF - v_drop
+    return volts_to_dac_code(v_dac)
+
 # Quiescent SR byte: bits 5,6 HIGH (inhibitory NPN collectors routed to
 # VCC, disengaged), bits 1..3 LOW (excitatory PNP collectors routed to
 # GND, disengaged). This is the "no synapse active" state. Loading
@@ -191,9 +220,70 @@ CH10_CHANNEL = 10
 def ch10_drive_codes(code: int = DAC_MAX_CODE) -> list[int]:
     """Quiescent DAC codes with channel 10 (the synapse V_OUT3 rail) asserted
     at `code`. This is the standard "drive the synapse rail" stimulus pattern."""
-    codes = list(DAC_QUIESCENT_CODES)
+    codes = quiescent_dac_codes()
     codes[CH10_CHANNEL] = code
     return codes
+
+
+def idle_weights() -> list[int]:
+    """Return a fresh 90-byte all-idle (SR_IDLE_BYTE) shift-register pattern."""
+    return [SR_IDLE_BYTE] * NUM_SYNAPSES
+
+
+def all_weights(byte: int) -> list[int]:
+    """Return a fresh 90-byte shift-register pattern with every byte = `byte`."""
+    return [byte] * NUM_SYNAPSES
+
+
+def quiescent_dac_codes() -> list[int]:
+    """Return a fresh copy of the quiescent DAC code vector."""
+    return list(DAC_QUIESCENT_CODES)
+
+
+# MNIST normalization constants (mean/std of the training set).
+MNIST_MEAN = 0.1307
+MNIST_STD = 0.3081
+
+
+def downsample_floor_blocks(img: np.ndarray) -> np.ndarray:
+    """Downsample a 28x28 image to 6x6 via int(ty*scale) floor blocks.
+
+    Matches Rust MnistData::load exactly. This DIVERGES from the TUI's
+    np.array_split path (see tarski_tui.downsample_array_split): for the same
+    28x28 input this path produces a finite array while array_split raises.
+    """
+    scale = 28.0 / 6.0
+    pixels_6x6 = np.zeros((6, 6), dtype=np.float32)
+    for ty in range(6):
+        for tx in range(6):
+            y0 = int(ty * scale)
+            y1 = min(int((ty + 1) * scale), 28)
+            x0 = int(tx * scale)
+            x1 = min(int((tx + 1) * scale), 28)
+            pixels_6x6[ty, tx] = img[y0:y1, x0:x1].mean()
+    return pixels_6x6
+
+
+def normalize_mnist(pixels: np.ndarray) -> np.ndarray:
+    """Apply the standard MNIST mean/std normalization to a pixel array."""
+    return (pixels / 255.0 - MNIST_MEAN) / MNIST_STD
+
+
+def load_mnist(data_dir: str):
+    """Load MNIST t10k images/labels from `data_dir`.
+
+    Returns (images, labels) as numpy arrays. Raises on missing/corrupt files.
+    """
+    import struct
+    images_path = f"{data_dir}/t10k-images-idx3-ubyte"
+    labels_path = f"{data_dir}/t10k-labels-idx1-ubyte"
+    with open(images_path, 'rb') as f:
+        magic, n, rows, cols = struct.unpack('>4I', f.read(16))
+        images = np.frombuffer(f.read(), dtype=np.uint8).reshape(n, rows, cols)
+    with open(labels_path, 'rb') as f:
+        magic, n = struct.unpack('>2I', f.read(8))
+        labels = np.frombuffer(f.read(), dtype=np.uint8)
+    return images, labels
 
 
 def fire_glyphs(flags) -> str:
@@ -290,6 +380,26 @@ class TarskiBoard:
                 return bytes(buf)
             buf.append(b[0])
 
+    def _write_u16_le(self, value: int):
+        """Emit a 16-bit value as two little-endian bytes (lo, hi)."""
+        self._send(bytes([value & 0xFF, (value >> 8) & 0xFF]))
+
+    def _read_u16_le(self) -> int:
+        """Read two bytes and assemble a little-endian unsigned 16-bit int."""
+        data = self._read(2)
+        return data[0] | (data[1] << 8)
+
+    def _read_u32_le(self) -> int:
+        """Read four bytes and assemble a little-endian unsigned 32-bit int."""
+        data = self._read(4)
+        return (data[0] | (data[1] << 8) |
+                (data[2] << 16) | (data[3] << 24))
+
+    def _expect_trn_end(self):
+        """Read one byte and require it to be PORT_TRN_END (else TimeoutError
+        via _read, or a discard of the terminator on success)."""
+        self._read(1)
+
     # ── Commands ──
 
     def get_signature(self) -> str:
@@ -334,7 +444,7 @@ class TarskiBoard:
         time.sleep(0.001)  # DAC settle
         snapshots = self.run_inference(num_samples, interval_us)
         # Release ch10 and leave the board quiescent.
-        self.load_dacs(list(DAC_QUIESCENT_CODES))
+        self.load_dacs(quiescent_dac_codes())
         return snapshots
 
     def quiesce(self, zero_weights: bool = True,
@@ -367,10 +477,10 @@ class TarskiBoard:
         The 74HC165 parallel-in side doesn't need clearing — it's
         read-only and re-samples on every parallel-load pulse.
         """
-        self.load_dacs(list(DAC_QUIESCENT_CODES))
+        self.load_dacs(quiescent_dac_codes())
         if zero_weights:
             quiescent = self.weight_to_sr_byte(0)
-            self.load_weights([quiescent] * NUM_SYNAPSES)
+            self.load_weights(all_weights(quiescent))
         if reset_output_latches:
             # The firmware's ReadOutput handler ends with _PulseResetSR(),
             # so just reading the output word clears all 10 latches as a
@@ -401,25 +511,24 @@ class TarskiBoard:
         self._send_cmd(PORT_LOAD_DAC, "DAC load NAK'd on command byte")
         self._send(bytes([n]))
         for code in codes:
-            code = max(0, min(DAC_MAX_CODE, code))
-            self._send(bytes([code & 0xFF, (code >> 8) & 0xFF]))
+            self._write_u16_le(clamp_dac_code(code))
         self._expect_final_ack(f"load_dacs({n})")
         return True
 
     def read_output(self) -> int:
         """Read the 16-bit spike output word from the 74HC165 latches."""
         self._send_cmd(PORT_READ_OUT, "Read output NAK'd")
-        data = self._read(2)  # LSB, MSB
-        trn = self._read(1)   # TRN_END
-        return data[0] | (data[1] << 8)
+        word = self._read_u16_le()  # LSB, MSB
+        self._expect_trn_end()
+        return word
 
     def read_measurement(self, channel: int) -> int:
         """Read ADC measurement. channel: 0=L1, 1=L2."""
         self._send_cmd(PORT_READ_MEAS, "Measurement NAK'd")
         self._send(bytes([channel]))
-        data = self._read(2)
-        trn = self._read(1)
-        return data[0] | (data[1] << 8)
+        value = self._read_u16_le()
+        self._expect_trn_end()
+        return value
 
     def set_flag(self, flag: int):
         self._send_cmd(PORT_SET_FLAG, "Set flag NAK'd on command byte")
@@ -538,11 +647,8 @@ class TarskiBoard:
             (interval_us >> 8) & 0xFF,
         ]))
         # Read num_samples × 2 bytes + TRN_END
-        samples = []
-        for _ in range(num_samples):
-            data = self._read(2)
-            samples.append(data[0] | (data[1] << 8))
-        self._read(1)  # TRN_END
+        samples = [self._read_u16_le() for _ in range(num_samples)]
+        self._expect_trn_end()
         return samples
 
     def measure_spikes(self, target_channel: int, dac_code: int,
@@ -655,9 +761,8 @@ class TarskiBoard:
             meas_channel,
         ]))
         # Read 4 bytes (u32 little-endian) + TRN_END
-        data = self._read(4)
-        self._read(1)  # TRN_END
-        elapsed = data[0] | (data[1] << 8) | (data[2] << 16) | (data[3] << 24)
+        elapsed = self._read_u32_le()
+        self._expect_trn_end()
         return None if elapsed == 0xFFFFFFFF else elapsed
 
     # ── High-level operations ──
@@ -687,13 +792,7 @@ class TarskiBoard:
         """
         nominal_scale = R_SET_INPUT / R_LEAK
         scale = nominal_scale * dac_scale
-        codes = []
-        for g in fc1_outputs:
-            v_drop = max(0.0, min(DAC_VREF, g * scale + V_BE))
-            v_dac = DAC_VREF - v_drop
-            code = int(round(v_dac / DAC_VREF * DAC_MAX_CODE))
-            codes.append(max(0, min(DAC_MAX_CODE, code)))
-        return codes
+        return [_fc1_value_to_dac_code(g, scale) for g in fc1_outputs]
 
     def weight_to_sr_byte(self, w: int) -> int:
         """Convert quantized weight (-7 to +7) to shift register byte.
@@ -739,7 +838,7 @@ class TarskiBoard:
             cp = json.load(f)
 
         fc2_q = cp['quantized']['fc2_weight']
-        sr_bytes = [SR_IDLE_BYTE] * NUM_SYNAPSES
+        sr_bytes = idle_weights()
         for h in range(9):
             for o in range(10):
                 sr_bytes[phys_byte(o, h)] = self.weight_to_sr_byte(fc2_q[h][o])
@@ -799,11 +898,7 @@ class TarskiBoard:
         codes = []
         for i, g in enumerate(fc1_outputs):
             per_ch = dac_scales[i] if i < len(dac_scales) else dac_scales[0]
-            scale = base * per_ch
-            v_drop = max(0.0, min(DAC_VREF, g * scale + V_BE))
-            v_dac = DAC_VREF - v_drop
-            code = int(round(v_dac / DAC_VREF * DAC_MAX_CODE))
-            codes.append(max(0, min(DAC_MAX_CODE, code)))
+            codes.append(_fc1_value_to_dac_code(g, base * per_ch))
         return codes
 
     def probe_sr_topology(self, observable_output: int = 9,
@@ -874,7 +969,7 @@ class TarskiBoard:
         print("\n  Warm-up: hold ch10 HIGH with all-+7 weights for ~600 ms")
         print("  (reproduces the --calibrate pre-Phase-3 integrator state).")
         for _ in range(3):
-            self.load_weights([w7_byte] * NUM_SYNAPSES)
+            self.load_weights(all_weights(w7_byte))
             try:
                 self.calib_l1_single(
                     dac_channel=10, dac_code=DAC_MAX_CODE,
@@ -882,8 +977,8 @@ class TarskiBoard:
                 )
             except Exception:
                 pass
-        self.load_weights([SR_IDLE_BYTE] * NUM_SYNAPSES)
-        self.load_dacs(list(DAC_QUIESCENT_CODES))
+        self.load_weights(idle_weights())
+        self.load_dacs(quiescent_dac_codes())
         time.sleep(0.01)
         print(f"  weight_to_sr_byte(+7) = 0x{w7_byte:02X} "
               f"(binary {w7_byte:08b})")
@@ -892,7 +987,7 @@ class TarskiBoard:
         # otherwise the board is in a state that the earlier --calibrate
         # phases somehow warm up and our cold-start probe is invalid.
         print("\n  Baseline: all 90 bytes at +7 (matches Phase 3 config):")
-        sr_all = [w7_byte] * NUM_SYNAPSES
+        sr_all = all_weights(w7_byte)
         fires_all = 0
         for _ in range(3):
             snaps = self.sample_with_synapse_pulse(
@@ -916,7 +1011,7 @@ class TarskiBoard:
         print(f"  (The other 89 bytes are held at 0.)\n")
 
         for byte_idx in range(NUM_SYNAPSES):
-            sr_bytes = [SR_IDLE_BYTE] * NUM_SYNAPSES
+            sr_bytes = idle_weights()
             sr_bytes[byte_idx] = w7_byte
             snaps = self.sample_with_synapse_pulse(
                 sr_bytes, num_samples=n_samples, interval_us=interval_us,
@@ -950,7 +1045,7 @@ class TarskiBoard:
                 base = row * 10
                 row_bytes = list(range(base, base + 10))
                 # Enable all 10 bytes in this row.
-                sr_bytes = [SR_IDLE_BYTE] * NUM_SYNAPSES
+                sr_bytes = idle_weights()
                 for b in row_bytes:
                     sr_bytes[b] = w7_byte
                 snaps = self.sample_with_synapse_pulse(
@@ -973,7 +1068,7 @@ class TarskiBoard:
                 base = r * 10
                 print(f"\n  Minimum-subset scan in row {r}:")
                 for k in range(1, 11):
-                    sr_bytes = [SR_IDLE_BYTE] * NUM_SYNAPSES
+                    sr_bytes = idle_weights()
                     for b in range(base, base + k):
                         sr_bytes[b] = w7_byte
                     snaps = self.sample_with_synapse_pulse(
@@ -997,7 +1092,7 @@ class TarskiBoard:
                   f"(finds which bits actually carry current):")
             per_bit_fires = {}
             for bit in range(8):
-                sr_bytes = [SR_IDLE_BYTE] * NUM_SYNAPSES
+                sr_bytes = idle_weights()
                 sr_bytes[b] = 1 << bit
                 snaps = self.sample_with_synapse_pulse(
                     sr_bytes, num_samples=n_samples, interval_us=interval_us,
@@ -1067,7 +1162,7 @@ class TarskiBoard:
         print(f"  [1] Per-hidden fire counts targeting O{observable_output} "
               f"(latch visible):")
         for h in range(9):
-            sr_bytes = [SR_IDLE_BYTE] * NUM_SYNAPSES
+            sr_bytes = idle_weights()
             idx = phys_byte(observable_output, h)
             sr_bytes[idx] = w7_byte
             snaps = self.sample_with_synapse_pulse(
@@ -1092,7 +1187,7 @@ class TarskiBoard:
         for j in range(10):
             if j == observable_output:
                 continue
-            sr_bytes = [SR_IDLE_BYTE] * NUM_SYNAPSES
+            sr_bytes = idle_weights()
             idx = phys_byte(j, 0)
             sr_bytes[idx] = w7_byte
             self.load_weights(sr_bytes)
@@ -1110,7 +1205,7 @@ class TarskiBoard:
             }
             print(f"    H0 → O{j}  byte[{idx:2d}]  "
                   f"base={base_c} drv={drv_c} Δ={delta:+d}")
-            self.load_weights([SR_IDLE_BYTE] * NUM_SYNAPSES)
+            self.load_weights(idle_weights())
 
         self.quiesce(zero_weights=True)
         return results
@@ -1157,16 +1252,16 @@ class TarskiBoard:
             # ReadMeasurement(source=1).
             v = self.read_measurement(1)
             # Release ch10 / weights back to idle.
-            self.load_dacs(list(DAC_QUIESCENT_CODES))
-            self.load_weights([SR_IDLE_BYTE] * NUM_SYNAPSES)
+            self.load_dacs(quiescent_dac_codes())
+            self.load_weights(idle_weights())
             time.sleep(0.002)
             print(f"  [L2 wired-OR] {label:<24}  ADC={v:4d}  (~{adc_to_volts(v):.2f} V)")
             return v
 
         # 1+2. L2 probe with three weight patterns.
         print("\n  (1+2) Does L2 output-bus swing with weight pattern?")
-        w_zero = [SR_IDLE_BYTE] * NUM_SYNAPSES
-        w_plus7 = [self.weight_to_sr_byte(7)] * NUM_SYNAPSES
+        w_zero = idle_weights()
+        w_plus7 = all_weights(self.weight_to_sr_byte(7))
         w_alt = [self.weight_to_sr_byte(7) if (i % 2 == 0) else 0
                  for i in range(NUM_SYNAPSES)]
         # Baseline (no ch10) for reference.
@@ -1253,7 +1348,7 @@ class TarskiBoard:
                 print(f"    {label}: error ({e})")
                 return None
             # Clean up weights.
-            self.load_weights([SR_IDLE_BYTE] * NUM_SYNAPSES)
+            self.load_weights(idle_weights())
             if elapsed is None:
                 print(f"    {label:<20} → no L2 pulse > 0.98 V within {max_wait_ms} ms")
             else:
@@ -1312,8 +1407,8 @@ class TarskiBoard:
                 print(f"    {label}: error ({e})")
                 return None
             finally:
-                self.load_weights([SR_IDLE_BYTE] * NUM_SYNAPSES)
-                self.load_dacs(list(DAC_QUIESCENT_CODES))
+                self.load_weights(idle_weights())
+                self.load_dacs(quiescent_dac_codes())
             delta = r['driven_count'] - r['baseline_count']
             print(f"    {label:<20} "
                   f"base={r['baseline_count']:4d} [{r['baseline_min']:4d}..{r['baseline_max']:4d}]  "
@@ -1589,7 +1684,7 @@ class TarskiBoard:
         # Dump raw output words from the actual all-excitatory sample run
         # so we can see what's really in the latches (before our bit
         # mapping / polarity inversion).
-        test_weights = [self.weight_to_sr_byte(7)] * 90
+        test_weights = all_weights(self.weight_to_sr_byte(7))
         snap_dbg = self.sample_with_synapse_pulse(
             test_weights, num_samples=5, interval_us=500,
         )
@@ -1633,7 +1728,7 @@ class TarskiBoard:
             """Build an SR byte array with only (src→output_j) synapses
             enabled for src in `subset`, at the given weight, for ALL
             output neurons j. Returns the 90-byte pattern."""
-            bytes_out = [SR_IDLE_BYTE] * NUM_SYNAPSES
+            bytes_out = idle_weights()
             wbyte = self.weight_to_sr_byte(weight)
             for src in subset:
                 for j in range(10):
@@ -1668,7 +1763,7 @@ class TarskiBoard:
         for weight in range(1, 8):
             fired, counts = measure_fire_pattern(all_sources, weight)
             weight_sweep_counts[weight] = counts
-            mark = ''.join('●' if f else '·' for f in fired)
+            mark = fire_glyphs(fired)
             print(f"    w={weight}: outputs {mark}   counts={counts}")
             for j in range(10):
                 if fired[j] and weight_threshold[j] is None:
@@ -1692,7 +1787,7 @@ class TarskiBoard:
             remaining = tuple(s for s in CH10_SOURCES if s != dropped)
             fired, counts = measure_fire_pattern(remaining, 7)
             leave_one_out[dropped] = {'fired': fired, 'counts': counts}
-            mark = ''.join('●' if f else '·' for f in fired)
+            mark = fire_glyphs(fired)
             print(f"    drop H{dropped} (keep {remaining}): {mark}")
         calib['synapse_combos']['leave_one_out_w7'] = leave_one_out
 
@@ -1704,19 +1799,18 @@ class TarskiBoard:
         for src in CH10_SOURCES:
             fired, counts = measure_fire_pattern((src,), 7)
             single_source[src] = {'fired': fired, 'counts': counts}
-            mark = ''.join('●' if f else '·' for f in fired)
+            mark = fire_glyphs(fired)
             print(f"    only H{src}: {mark}")
         calib['synapse_combos']['single_source_w7'] = single_source
 
         # --- 4.4 Pairwise @ w=+7 ---
         # All 6 pairs. Gives finer bounds on pairwise synapse sums.
         print("\n  [4.4] Pairs of sources @ w=+7:")
-        from itertools import combinations
         pairs = {}
         for pair in combinations(CH10_SOURCES, 2):
             fired, counts = measure_fire_pattern(pair, 7)
             pairs[pair] = {'fired': fired, 'counts': counts}
-            mark = ''.join('●' if f else '·' for f in fired)
+            mark = fire_glyphs(fired)
             print(f"    H{pair[0]}+H{pair[1]}: {mark}")
         calib['synapse_combos']['pairs_w7'] = {
             f"{a}_{b}": v for (a, b), v in pairs.items()
@@ -1751,7 +1845,7 @@ class TarskiBoard:
             src_a, src_b = test_pair
             # Try adding a 3rd source at −7 inhibitory
             inh_source = next(s for s in CH10_SOURCES if s not in test_pair)
-            sr_bytes = [SR_IDLE_BYTE] * NUM_SYNAPSES
+            sr_bytes = idle_weights()
             sr_bytes[phys_byte(test_output, src_a)] = self.weight_to_sr_byte(7)
             sr_bytes[phys_byte(test_output, src_b)] = self.weight_to_sr_byte(7)
             snap_exc = self.sample_with_synapse_pulse(sr_bytes, num_samples=50, interval_us=500)
@@ -1913,7 +2007,22 @@ class TarskiBoard:
         return THETA_0 * R_SET_INPUT / R_LEAK
 
 
-def main():
+def _parse_dac_code_token(tok: str) -> int:
+    """Parse one --set-dacs token into a clamped 12-bit DAC code.
+
+    Accepts a decimal/0x-hex code, or an "Nv"/"Nmv" voltage suffix (volts /
+    millivolts) which is converted through the DAC reference and clamped.
+    """
+    tok = tok.strip().lower()
+    if tok.endswith('mv'):
+        return volts_to_dac_code(float(tok[:-2]) / 1000.0)
+    if tok.endswith('v'):
+        return volts_to_dac_code(float(tok[:-1]))
+    return int(tok, 0)
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """Construct the tarski_board CLI argument parser."""
     parser = argparse.ArgumentParser(description='Tarski board interface')
     parser.add_argument('--port', required=True, help='Serial port (e.g., /dev/tty.usbserial-XXX)')
     parser.add_argument('--baud', type=int, default=115200)
@@ -2020,12 +2129,22 @@ def main():
                              'MCP4728s (if any) respond.')
     parser.add_argument('-v', '--verbose', action='store_true',
                         help='Print hex of every byte sent/received on the serial link.')
+    return parser
+
+
+def connect_board(args) -> "TarskiBoard":
+    """Open the serial connection to the board and return it."""
+    return TarskiBoard(args.port, verbose=args.verbose)
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
     def _parse_addr(s: str) -> int:
         return int(s, 0)
 
-    board = TarskiBoard(args.port, verbose=args.verbose)
+    board = connect_board(args)
 
     try:
         # Handshake
@@ -2069,17 +2188,7 @@ def main():
                 sys.exit(1)
 
         if args.set_dacs:
-            def _parse_code(tok: str) -> int:
-                tok = tok.strip().lower()
-                if tok.endswith('mv'):
-                    v = float(tok[:-2]) / 1000.0
-                    return max(0, min(DAC_MAX_CODE, int(round(v / DAC_VREF * DAC_MAX_CODE))))
-                if tok.endswith('v'):
-                    v = float(tok[:-1])
-                    return max(0, min(DAC_MAX_CODE, int(round(v / DAC_VREF * DAC_MAX_CODE))))
-                return int(tok, 0)
-
-            codes = [_parse_code(t) for t in args.set_dacs.split(',')]
+            codes = [_parse_dac_code_token(t) for t in args.set_dacs.split(',')]
             if not 1 <= len(codes) <= 12:
                 print(f"--set-dacs: need 1..12 codes, got {len(codes)}")
                 sys.exit(1)
@@ -2187,10 +2296,10 @@ def main():
             print(f"\n=== ch10 Burst (firmware) N={n} hi={hi}µs lo={lo}µs ===")
             board.quiesce(zero_weights=True, reset_output_latches=True)
             wbyte = board.weight_to_sr_byte(7)
-            board.load_weights([wbyte] * NUM_SYNAPSES)
+            board.load_weights(all_weights(wbyte))
             print(f"  Loaded 90 synapses at w=+7")
             # Make sure the non-ch10 DACs are at their quiescent state.
-            codes = list(DAC_QUIESCENT_CODES)
+            codes = quiescent_dac_codes()
             board.load_dacs(codes)
             print(f"  Other DACs set to quiescent (ch0..8 at DAC_MAX, ch9..11 at 0)")
             res = board.ch10_burst(n, high_us=hi, low_us=lo)
@@ -2198,7 +2307,7 @@ def main():
             print(f"  Burst done: {n} cycles in {res['elapsed_us']} µs "
                   f"(~{rate:.0f} edges/s)")
             bits = extract_output_spikes(res['word'])
-            bits_str = ''.join('●' if b else '·' for b in bits)
+            bits_str = fire_glyphs(bits)
             print(f"  Raw output: 0x{res['word']:04X}")
             print(f"  Decoded O0..O9:  {bits_str}")
             print(f"  {sum(bits)}/10 latches fired")
@@ -2209,10 +2318,10 @@ def main():
             print(f"\n=== ch10 Toggle Test ({n} cycles) ===")
             board.quiesce(zero_weights=True, reset_output_latches=True)
             wbyte = board.weight_to_sr_byte(7)
-            board.load_weights([wbyte] * NUM_SYNAPSES)
+            board.load_weights(all_weights(wbyte))
             print(f"  Loaded 90 synapses at w=+7")
-            codes_lo = list(DAC_QUIESCENT_CODES)  # ch10 = 0
-            codes_hi = list(DAC_QUIESCENT_CODES)
+            codes_lo = quiescent_dac_codes()  # ch10 = 0
+            codes_hi = quiescent_dac_codes()
             codes_hi[10] = DAC_MAX_CODE
             import time as _t
             t0 = _t.time()
@@ -2226,7 +2335,7 @@ def main():
             # Final read — don't clear before this
             word = board.read_output()
             bits = extract_output_spikes(word)
-            bits_str = ''.join('●' if b else '·' for b in bits)
+            bits_str = fire_glyphs(bits)
             print(f"  Raw output: 0x{word:04X}")
             print(f"  Decoded O0..O9:  {bits_str}")
             print(f"  {sum(bits)}/10 latches fired")
@@ -2242,13 +2351,13 @@ def main():
                   f"(~{baseline*5.0/1023:.2f} V)")
             # Load w=+7 but leave ch10 at 0: no current should flow yet
             wbyte = board.weight_to_sr_byte(7)
-            board.load_weights([wbyte] * NUM_SYNAPSES)
+            board.load_weights(all_weights(wbyte))
             time.sleep(0.01)
             preload = board.read_measurement(1)
             print(f"  weights=+7, ch10=0V:                ADC={preload:4d}  "
                   f"(~{preload*5.0/1023:.2f} V)")
             # Assert ch10 HIGH and sample L2 at several time points
-            codes = list(DAC_QUIESCENT_CODES)
+            codes = quiescent_dac_codes()
             codes[10] = DAC_MAX_CODE
             board.load_dacs(codes)
             time.sleep(0.001)
@@ -2268,7 +2377,7 @@ def main():
             print(f"  weights=+7, ch10=HIGH (t=3.1 s):    ADC={t_3s:4d}  "
                   f"(~{t_3s*5.0/1023:.2f} V)")
             # Drop ch10, see membranes decay
-            board.load_dacs(list(DAC_QUIESCENT_CODES))
+            board.load_dacs(quiescent_dac_codes())
             time.sleep(0.01)
             after = board.read_measurement(1)
             print(f"  ch10 back to 0V (t=10 ms after):    ADC={after:4d}  "
@@ -2276,7 +2385,7 @@ def main():
             # Also check the final latch state for reference
             word = board.read_output()
             bits = extract_output_spikes(word)
-            bits_str = ''.join('●' if b else '·' for b in bits)
+            bits_str = fire_glyphs(bits)
             print(f"\n  latch word at end of run: 0x{word:04X}  "
                   f"decoded: {bits_str}")
             print(f"  {sum(bits)}/10 latches captured something")
@@ -2307,11 +2416,11 @@ def main():
             # manage to squeeze into the 74HC02 SR latches.
             board.quiesce(zero_weights=True, reset_output_latches=True)
             wbyte = board.weight_to_sr_byte(7)
-            board.load_weights([wbyte] * NUM_SYNAPSES)
+            board.load_weights(all_weights(wbyte))
             print(f"  [1] Loaded 90 synapses at w=+7 (byte 0x{wbyte:02X}).")
             # Latches cleared as a side effect of quiesce. DO NOT clear
             # again between here and the wait.
-            codes = list(DAC_QUIESCENT_CODES)
+            codes = quiescent_dac_codes()
             codes[10] = DAC_MAX_CODE
             board.load_dacs(codes)
             print(f"  [2] ch10 → DAC_MAX_CODE (~4 V); latches already clean.")
@@ -2319,7 +2428,7 @@ def main():
             time.sleep(args.pulse_wait)
             word = board.read_output()
             bits = extract_output_spikes(word)
-            bits_str = ''.join('●' if b else '·' for b in bits)
+            bits_str = fire_glyphs(bits)
             print(f"  [4] Raw output: 0x{word:04X}  (binary {word:016b})")
             print(f"      Decoded O0..O9:  {bits_str}")
             print(f"      Per-output list: {bits}")
@@ -2329,25 +2438,25 @@ def main():
 
         if args.weights_max:
             wbyte = board.weight_to_sr_byte(7)
-            board.load_weights([wbyte] * NUM_SYNAPSES)
+            board.load_weights(all_weights(wbyte))
             print(f"Loaded all 90 synapses at w=+7 (byte 0x{wbyte:02X}).")
 
         if args.weights_zero:
             wbyte = board.weight_to_sr_byte(0)
-            board.load_weights([wbyte] * NUM_SYNAPSES)
+            board.load_weights(all_weights(wbyte))
             print(f"Loaded all 90 synapses at w=0 (byte 0x{wbyte:02X}).")
 
         if args.read_output:
             word = board.read_output()
             bits = extract_output_spikes(word)
-            bits_str = ''.join('●' if b else '·' for b in bits)
+            bits_str = fire_glyphs(bits)
             print(f"Raw output word: 0x{word:04X}  (binary {word:016b})")
             print(f"Decoded O0..O9:  {bits_str}")
             print(f"Per-output list: {bits}")
 
         if args.clear_latches:
             idle = board.weight_to_sr_byte(0)
-            board.load_weights([idle] * NUM_SYNAPSES)
+            board.load_weights(all_weights(idle))
             board.read_output()  # side effect: pulses RESET_SR
             print("Cleared synapse SR (idle) + output SR latches (RESET_SR).")
 
@@ -2398,35 +2507,15 @@ def main():
             fc1_w = np.array(cp['weights']['fc1_weight'], dtype=np.float32)
 
             # Load MNIST test data
-            import struct as st
-            images_path = f"{args.data_dir}/t10k-images-idx3-ubyte"
-            labels_path = f"{args.data_dir}/t10k-labels-idx1-ubyte"
-
-            with open(images_path, 'rb') as f:
-                magic, n, rows, cols = st.unpack('>4I', f.read(16))
-                images = np.frombuffer(f.read(), dtype=np.uint8).reshape(n, rows, cols)
-
-            with open(labels_path, 'rb') as f:
-                magic, n = st.unpack('>2I', f.read(8))
-                labels = np.frombuffer(f.read(), dtype=np.uint8)
+            images, labels = load_mnist(args.data_dir)
 
             # Downsample to 6x6 and normalize
             correct = 0
             for i in range(min(args.samples, len(images))):
                 img = images[i].astype(np.float32)
                 # Downsample 28x28 → 6x6 by float-scaled block averaging
-                # (matches Rust MnistData::load exactly)
-                scale = 28.0 / 6.0
-                pixels_6x6 = np.zeros((6, 6), dtype=np.float32)
-                for ty in range(6):
-                    for tx in range(6):
-                        y0 = int(ty * scale)
-                        y1 = min(int((ty + 1) * scale), 28)
-                        x0 = int(tx * scale)
-                        x1 = min(int((tx + 1) * scale), 28)
-                        pixels_6x6[ty, tx] = img[y0:y1, x0:x1].mean()
-                # MNIST normalization
-                pixels_norm = (pixels_6x6 / 255.0 - 0.1307) / 0.3081
+                # (matches Rust MnistData::load exactly), then normalize.
+                pixels_norm = normalize_mnist(downsample_floor_blocks(img))
 
                 prediction, spike_counts = board.infer(
                     pixels_norm, fc1_w, calib,

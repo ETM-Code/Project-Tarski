@@ -6,6 +6,12 @@ Most AI runs on digital hardware that burns a lot of power. Brains don't. A brai
 
 This repository is the anchor. It holds the project-level context and the report workspace, and it pulls the real implementation together as submodules.
 
+## Status
+
+This is a proof of concept, not a finished product. The board exists: a 350 by 350 mm, four-layer, 3,442-component PCB. It has been powered, reworked, and it spikes on stimulation. What it has not done yet is a full end-to-end MNIST classification on the bench. The board arrived two days after the project deadline, so bring-up is still ongoing.
+
+So read the numbers accordingly. The accuracy figures (mid-80s on 6×6 MNIST) and the power figures come from the trained model and the hardware-accurate emulator. They are what the board is expected to reach, not a measured bench result. Bench validation is the next step.
+
 ## The submodules
 
 - `emulator/`: [Tarski-Emulator](https://github.com/ETM-Code/Tarski-Emulator). Boots the real board firmware in simulation and couples it to a physics model of the analogue neurons.

@@ -1,45 +1,53 @@
 # Project Tarski
 
-Project Tarski is the integration repository for a discrete-component analogue spiking neural network platform for MNIST classification.
+Project Tarski is an attempt to build an analogue neuromorphic accelerator for low-power computing. The idea is simple to state and hard to do. Run a spiking neural network in analogue electronics, on ordinary discrete components, and classify MNIST digits while drawing a fraction of the power a digital chip needs for the same work.
 
-This repository keeps the project-level documentation, report workspace, hardware support material, and integration context. The main implementation codebases are linked as submodules:
+Most AI runs on digital hardware that burns a lot of power. Brains don't. A brain computes in analogue, with spikes, on roughly 20 watts. Tarski takes that literally and builds it from parts you can buy off a reel: op-amps, transistors, resistors, capacitors. No custom silicon.
 
-- `emulator/` -> [Tarski-Emulator](https://github.com/ETM-Code/Tarski-Emulator)
-- `gilgamesh/` -> [Gilgamesh](https://github.com/ETM-Code/Gilgamesh)
-- `Schematics/` -> [Tarski-Schematics](https://github.com/ETM-Code/Tarski-Schematics)
+This repository is the anchor. It holds the project-level context and the report workspace, and it pulls the real implementation together as submodules.
 
-## Report-Aligned Scope
+## The submodules
 
-The report covers the full workflow end-to-end:
+- `emulator/`: [Tarski-Emulator](https://github.com/ETM-Code/Tarski-Emulator). Boots the real board firmware in simulation and couples it to a physics model of the analogue neurons.
+- `gilgamesh/`: [Gilgamesh](https://github.com/ETM-Code/Gilgamesh). Trains the networks with the hardware's constraints built in, not an idealised model.
+- `Schematics/`: [Tarski-Schematics](https://github.com/ETM-Code/Tarski-Schematics). The KiCad schematics and PCB layouts for the board itself.
 
-1. LIF analogue circuit design and SPICE validation
-2. Training and hardware-aware modelling in Gilgamesh
-3. PCB design and hardware implementation
-4. Emulator and firmware integration
-5. Power and accuracy evaluation
+## How the pieces fit
 
-Use this repository as the anchor for that full narrative, then work inside the dedicated repos for implementation changes.
+The work runs end to end.
 
-## Repository Layout
+1. Design the analogue leaky integrate-and-fire neuron and check it in SPICE.
+2. Train a network in Gilgamesh against the real circuit behaviour.
+3. Lay out the board in Tarski-Schematics and build it.
+4. Emulate firmware and board together, before and after fabrication.
+5. Measure power and accuracy.
 
-- `report/`: final report drafting workspace and supporting assets
+Start here for the whole picture. Work inside the dedicated repos when you want to change something.
+
+## Repository layout
+
+- `report/`: report drafting workspace and supporting assets
 - `SPICE/`: circuit-level simulation workspaces and generators
-- `arduino-mnist/`: Arduino-compatible inference project and host tooling
+- `arduino-mnist/`: the Arduino digital baseline and host tooling
 - `T1-devboard/`: interface firmware for board control
 - `scope-probe/`: oscilloscope capture and power-analysis tooling
-- `references/`: datasheets and stable background material
+- `references/`: datasheets and background material
 - `assets/`: collateral and exported artifacts
-- `archive/`: superseded/legacy material kept for traceability
-- `Utilities/`: lightweight maintenance scripts
+- `archive/`: superseded material, kept for traceability
+- `Utilities/`: small maintenance scripts
 
-## Clone With Submodules
+## Clone with submodules
 
 ```bash
 git clone --recurse-submodules https://github.com/ETM-Code/Project-Tarski.git
 ```
 
-If already cloned:
+If you already cloned it:
 
 ```bash
 git submodule update --init --recursive
 ```
+
+## License
+
+Apache License 2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

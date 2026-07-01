@@ -33,3 +33,15 @@ snntorch_rs/data/
 *.mov
 *.mp4
 ~$*
+*.pptx
+
+# MNIST is downloadable, not vendored (see arduino-mnist/README for fetch steps)
+**/MNIST/raw/
+**/mnist/*ubyte*
+**/mnist/*.idx*-ubyte
+
+# Regeneratable SPICE simulation outputs
+SPICE/*/outputs/*.csv
+
+# Report office documents are kept out of the repo for now
+report/**/*.docx

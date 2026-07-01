@@ -1,0 +1,12 @@
+Project Tarski
+Copyright 2026 Eoghan Collins and Mateusz Brucki
+
+This product includes work developed as part of Project Tarski, an analogue
+neuromorphic spiking neural network accelerator for low-power computing,
+created at the University of Galway.
+
+Licensed under the Apache License, Version 2.0 (the "License"); you may not
+use these files except in compliance with the License. A copy of the License
+is provided in the LICENSE file and at:
+
+    http://www.apache.org/licenses/LICENSE-2.0

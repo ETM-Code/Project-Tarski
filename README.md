@@ -4,7 +4,7 @@ Project Tarski is an attempt to build an analogue neuromorphic accelerator for l
 
 Most AI runs on digital hardware that burns a lot of power. Brains don't. A brain computes in analogue, with spikes, on roughly 20 watts. Tarski takes that literally and builds it from parts you can buy off a reel: op-amps, transistors, resistors, capacitors. No custom silicon.
 
-This repository is the anchor. It holds the project-level context and the report workspace, and it pulls the real implementation together as submodules.
+This repository is the anchor. It holds the project-level context and pulls the real implementation together as submodules.
 
 ## Status
 
@@ -32,7 +32,6 @@ Start here for the whole picture. Work inside the dedicated repos when you want 
 
 ## Repository layout
 
-- `report/`: report drafting workspace and supporting assets
 - `SPICE/`: circuit-level simulation workspaces and generators
 - `arduino-mnist/`: the Arduino digital baseline and host tooling
 - `T1-devboard/`: interface firmware for board control
